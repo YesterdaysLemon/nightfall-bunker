@@ -395,14 +395,16 @@ export class Zombies {
     }
   }
 
+  // Voices stay attached to the zombie that made them.
   voice(z, dt, listener) {
+    z.voice?.move(z.x, z.y + 1.6, z.z);
     z.nextGroan -= dt;
     if (z.nextGroan > 0) return;
     const d = listener ? Math.hypot(listener.x - z.x, listener.z - z.z) : 0;
     z.nextGroan = 2.5 + Math.random() * 6 + d * 0.08;
     const pos = { x: z.x, y: z.y + 1.6, z: z.z };
-    if (z.cls === 2 && z.state === ZS.CHASE && Math.random() < 0.5) this.audio.zombieScream(pos, z.seed);
-    else this.audio.zombieGroan(pos, z.seed);
+    if (z.cls === 2 && z.state === ZS.CHASE && Math.random() < 0.5) z.voice = this.audio.zombieScream(pos, z.seed);
+    else z.voice = this.audio.zombieGroan(pos, z.seed);
   }
 
   clear() {

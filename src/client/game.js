@@ -25,7 +25,7 @@ const WALK = 4.2, SPRINT = 6.3;
 const INPUT_RATE = 1 / 20;
 const POWERUP_NAMES = { maxammo: 'Max Ammo', instakill: 'Insta-Kill', doublepoints: 'Double Points', nuke: 'Kaboom', carpenter: 'Carpenter' };
 
-const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _dir = new THREE.Vector3();
+const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _dir = new THREE.Vector3(), _up = new THREE.Vector3();
 
 export class Game {
   constructor(canvas, settings) {
@@ -34,7 +34,8 @@ export class Game {
     this.rig = new SceneRig(canvas, settings.quality);
     this.tex = createTextures(this.rig.renderer);
     this.muted = !!settings.muted;
-    this.audio = new AudioEngine({ masterVolume: this.muted ? 0 : settings.volume });
+    this.audio = new AudioEngine({ masterVolume: this.muted ? 0 : settings.volume, hrtf: settings.hrtf !== false });
+    this.audio.occlusion = (x, y, z) => this.occlusionAt(x, y, z);
     this.level = new Level(this.rig, this.tex);
     this.exterior = new Exterior(this.rig, this.level.mats, this.tex);
     this.world = new World();
@@ -98,6 +99,21 @@ export class Game {
     this.snapRows = [];
   }
 
+  // 0..1: how much level geometry sits between the camera and a sound. Two rays (the source and
+  // a little above it) so a zombie crouched below a sill is only partly muffled.
+  occlusionAt(x, y, z) {
+    const o = this.rig.camera.position;
+    let blocked = 0;
+    for (const dy of [0, 0.6]) {
+      const dx = x - o.x, dyy = y + dy - o.y, dz = z - o.z;
+      const len = Math.hypot(dx, dyy, dz);
+      if (len < 0.8) continue;
+      const hit = this.world.raycast(o.x, o.y, o.z, dx / len, dyy / len, dz / len, len);
+      if (hit < len - 0.35) blocked++;
+    }
+    return blocked / 2;
+  }
+
   resize() {
     this.rig.resize();
     this.vm.resize(innerWidth / innerHeight);
@@ -107,6 +123,7 @@ export class Game {
     this.settings = s;
     this.rig.setQuality(s.quality);
     this.audio.setMasterVolume(this.muted ? 0 : s.volume);
+    this.audio.hrtf = s.hrtf !== false;
   }
 
   setMuted(on) {
@@ -312,7 +329,7 @@ export class Game {
         this.audio.roundStart(e[1]);
         break;
       case 'rend': this.audio.roundEnd(e[1]); break;
-      case 'zatk': { const z = this.zombies.get(e[1]); if (z) this.audio.zombieAttack({ x: z.x, y: z.y + 1.5, z: z.z }, z.seed); break; }
+      case 'zatk': { const z = this.zombies.get(e[1]); if (z) z.voice = this.audio.zombieAttack({ x: z.x, y: z.y + 1.5, z: z.z }, z.seed); break; }
       case 'zspawn': break;
       case 'chat': { const pl = this.players.get(e[1]); if (pl) this.hud.chat(pl.name, e[2], PLAYER_COLORS[pl.slot % 4]); break; }
       case 'radio': this.radio?.stop?.(); this.radio = this.audio.radioSong({ x: RADIO.pos[0], y: RADIO.pos[1], z: RADIO.pos[2] }); break;
@@ -846,7 +863,8 @@ export class Game {
     this.fx.update(dt, this.mode === 'play' ? this.rig.camera.position : null);
     const cam = this.rig.camera;
     cam.getWorldDirection(_dir);
-    this.audio.setListener(cam.position.x, cam.position.y, cam.position.z, _dir.x, _dir.y, _dir.z);
+    _up.set(0, 1, 0).applyQuaternion(cam.quaternion);
+    this.audio.setListener(cam.position.x, cam.position.y, cam.position.z, _dir.x, _dir.y, _dir.z, _up.x, _up.y, _up.z);
     this.audio.update(dt);
     this.render();
     this.rig.adapt(dt);

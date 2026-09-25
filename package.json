@@ -16,7 +16,8 @@
     "check": "node scripts/check.mjs",
     "build:worker": "node scripts/build-worker.mjs",
     "dev:worker": "wrangler dev",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "audio-check": "node scripts/audio-check.mjs"
   },
   "dependencies": {
     "ws": "8.21.3"

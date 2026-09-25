@@ -8,7 +8,7 @@ import { escapeHtml } from './hud.js';
 const $ = (id) => document.getElementById(id);
 const screens = ['screenMain', 'screenLobby', 'screenOver'];
 
-const DEFAULTS = { name: '', sensitivity: 1, fov: 80, volume: 0.8, quality: 'medium', invert: false };
+const DEFAULTS = { name: '', sensitivity: 1, fov: 80, volume: 0.8, quality: 'medium', invert: false, hrtf: true };
 
 function loadSettings() {
   try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem('nb_settings') || '{}') }; } catch { return { ...DEFAULTS }; }
@@ -46,6 +46,7 @@ $('setFov').value = settings.fov;
 $('setVol').value = settings.volume;
 $('setQuality').value = settings.quality;
 $('setInvert').checked = settings.invert;
+$('setHrtf').checked = settings.hrtf;
 const syncSettings = () => {
   settings.name = nameInput.value.trim().slice(0, 16) || settings.name;
   settings.sensitivity = Number($('setSens').value);
@@ -53,10 +54,11 @@ const syncSettings = () => {
   settings.volume = Number($('setVol').value);
   settings.quality = $('setQuality').value;
   settings.invert = $('setInvert').checked;
+  settings.hrtf = $('setHrtf').checked;
   saveSettings(settings);
   game.applySettings(settings);
 };
-for (const id of ['nameInput', 'setSens', 'setFov', 'setVol', 'setQuality', 'setInvert']) $(id).addEventListener('change', syncSettings);
+for (const id of ['nameInput', 'setSens', 'setFov', 'setVol', 'setQuality', 'setInvert', 'setHrtf']) $(id).addEventListener('change', syncSettings);
 
 function show(screen) {
   $('menu').hidden = !screen;

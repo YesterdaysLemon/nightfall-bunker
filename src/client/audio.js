@@ -1,10 +1,14 @@
 // Procedural Web Audio engine: every sound is synthesized at runtime (no samples, no imports).
-// Graph: voices -> [distance lowpass] -> [panner] -> bus (sfx | music | dry) -> master -> compressor -> out.
-// sfx and music also feed one shared "bunker" convolver reverb.
+// Graph: voices -> [air/occlusion lowpass -> makeup -> HRTF panner] -> bus (sfx | music | dry)
+//   -> master -> limiter -> out. Positional voices also send a steady, un-attenuated feed to one
+// shared "bunker" convolver, so the direct/reverb ratio falls with distance like a real room.
 
 const EPS = 1e-4;
 const P_LOW = 0, P_MED = 1, P_HIGH = 2, P_CRIT = 3;
-const REF_DIST = 2.5, MAX_DIST = 45, ROLLOFF = 1.2;
+const REF_DIST = 1.5, MAX_DIST = 50, ROLLOFF = 1.35;   // exponential: steeper than life, for clarity
+const HRTF_DIST = 30;       // closer than this: HRTF (front/back/height cues); beyond: cheap equal-power
+const SPATIAL_GAIN = 1.7;   // makeup so nearby sounds keep their punch after the steeper falloff
+const NOOP_TRACK = Object.freeze({ move() {}, stop() {} });
 const NOISE_SEC = 2;
 const NOOP_HANDLE = Object.freeze({ stop() {} });
 
@@ -136,6 +140,10 @@ export class AudioEngine {
     this._amb = null;
     this._zcache = new Map();
     this._speechVoice = null;
+    // Optional (x, y, z) => 0..1 wall occlusion between listener and a source, set by the game.
+    this.occlusion = null;
+    // HRTF (headphones) vs equal-power stereo (speakers).
+    this.hrtf = o.hrtf !== false;
   }
 
   // ---- lifecycle ------------------------------------------------------------------------------
@@ -169,25 +177,46 @@ export class AudioEngine {
     if (this.music) this.music.gain.setTargetAtTime(this._muv, this.ctx.currentTime, 0.05);
   }
 
-  // Forward is flattened to the horizontal plane: equalpower panning only uses azimuth, and this
-  // keeps the orientation valid when the camera looks straight up or down.
-  setListener(px, py, pz, fx, fy, fz) {
+  // Full 3D orientation when an up vector is given (HRTF uses elevation); otherwise the forward
+  // vector is flattened so looking straight up or down never produces a degenerate basis.
+  setListener(px, py, pz, fx, fy, fz, ux, uy, uz) {
     if (!Number.isFinite(px) || !Number.isFinite(py) || !Number.isFinite(pz)) return;
     const L = this._L;
     L.x = px; L.y = py; L.z = pz;
     const l = this.ctx && this.ctx.listener;
     if (!l) return;
-    let hx = fin(fx), hz = fin(fz);
-    const m = Math.hypot(hx, hz);
-    if (m > 1e-4) { hx /= m; hz /= m; this._fx = hx; this._fz = hz; } else { hx = this._fx; hz = this._fz; }
+    let ax = fin(fx), ay = fin(fy), az = fin(fz), bx = fin(ux), by = fin(uy, 1), bz = fin(uz);
+    const full = Number.isFinite(ux) && Number.isFinite(uy) && Number.isFinite(uz) && Math.hypot(ax, ay, az) > 1e-4;
+    if (!full) {
+      const m = Math.hypot(ax, az);
+      if (m > 1e-4) { ax /= m; az /= m; this._fx = ax; this._fz = az; } else { ax = this._fx; az = this._fz; }
+      ay = 0; bx = 0; by = 1; bz = 0;
+    }
     if (l.positionX) {
       l.positionX.value = px; l.positionY.value = py; l.positionZ.value = pz;
-      l.forwardX.value = hx; l.forwardY.value = 0; l.forwardZ.value = hz;
-      l.upX.value = 0; l.upY.value = 1; l.upZ.value = 0;
+      l.forwardX.value = ax; l.forwardY.value = ay; l.forwardZ.value = az;
+      l.upX.value = bx; l.upY.value = by; l.upZ.value = bz;
     } else {
       if (l.setPosition) l.setPosition(px, py, pz);
-      if (l.setOrientation) l.setOrientation(hx, 0, hz, 0, 1, 0);
+      if (l.setOrientation) l.setOrientation(ax, ay, az, bx, by, bz);
     }
+  }
+
+  // Handle that keeps a positional voice attached to a moving source.
+  _track(v) {
+    if (!v || !v.panner) return NOOP_TRACK;
+    return {
+      move: (x, y, z) => {
+        if (v.done || !this.ctx || !Number.isFinite(x) || !Number.isFinite(z)) return;
+        const p = v.panner, t = this.ctx.currentTime;
+        if (p.positionX) {
+          p.positionX.setTargetAtTime(x, t, 0.03);
+          p.positionY.setTargetAtTime(fin(y), t, 0.03);
+          p.positionZ.setTargetAtTime(z, t, 0.03);
+        } else if (p.setPosition) p.setPosition(x, fin(y), z);
+      },
+      stop: () => this._kill(v, 0.08),
+    };
   }
 
   update(dt) {
@@ -433,18 +462,19 @@ export class AudioEngine {
   }
 
   zombieGroan(pos, seed = 0) {
-    if (!this._ok() || !this._groanToken()) return;
-    const z = this._zv(seed), P = validPos(pos), v = this._voice(P_LOW, P); if (!v) return;
+    if (!this._ok() || !this._groanToken()) return NOOP_TRACK;
+    const z = this._zv(seed), P = validPos(pos), v = this._voice(P_LOW, P); if (!v) return NOOP_TRACK;
     const t = this._now(), dur = rand(1, 2), f0 = z.f0 * rand(0.94, 1.06);
     v.out.gain.value = 0.55;
     const { src, eg } = this._throat(v, t, dur, f0, z);
     wobble(src.frequency, t, dur, f0, 0.07, 5, 0.8);
     ahr(eg.gain, t, dur * 0.25, dur * 0.35, dur * 0.4, 4);
     this._burst(v, v.out, t, { kind: 'pink', f: z.va[0] * 1.6, q: 1.2, a: dur * 0.3, h: dur * 0.2, d: dur * 0.5, peak: z.breath * 0.5 });
+    return this._track(v);
   }
 
   zombieScream(pos, seed = 0) {
-    const z = this._zv(seed), P = validPos(pos), v = this._voice(P_MED, P); if (!v) return;
+    const z = this._zv(seed), P = validPos(pos), v = this._voice(P_MED, P); if (!v) return NOOP_TRACK;
     const t = this._now(), dur = 0.85, f = z.f0 * rand(2.9, 3.4);
     v.out.gain.value = 0.5;
     const { src, eg } = this._throat(v, t, dur, f, z, { vA: VOWELS[0], vB: VOWELS[3], scale: 1.3, q: 4, rough: 55 + z.rough, depth: 0.3, drive: 'fuzz' });
@@ -456,20 +486,22 @@ export class AudioEngine {
     link(this._osc(v, 'sine', 7 + z.harsh * 4, t, t + dur), this._g(v, f * 0.04), fp);
     ahr(eg.gain, t, 0.04, 0.45, 0.35, 3.5);
     this._burst(v, v.out, t, { type: 'highpass', f: 2200, a: 0.03, h: 0.4, d: 0.35, peak: 0.25 });
+    return this._track(v);
   }
 
   zombieAttack(pos, seed = 0) {
-    const z = this._zv(seed), P = validPos(pos), v = this._voice(P_MED, P); if (!v) return;
+    const z = this._zv(seed), P = validPos(pos), v = this._voice(P_MED, P); if (!v) return NOOP_TRACK;
     const t = this._now(), dur = 0.55, f = z.f0 * 1.6;
     v.out.gain.value = 0.6;
     const { src, eg } = this._throat(v, t, dur, f, z, { vA: VOWELS[3], vB: VOWELS[0], scale: 1.1, rough: 35 + z.rough * 0.5, depth: 0.75, drive: 'hard' });
     glide(src.frequency, t, f * 1.1, f * 0.8, dur);
     ahr(eg.gain, t, 0.02, 0.22, 0.28, 3.5);
     this._burst(v, v.out, t + 0.26, { kind: 'pink', f: 700, f2: 3200, q: 1.3, a: 0.05, d: 0.13, peak: 0.8 });
+    return this._track(v);
   }
 
   zombieDeath(pos, seed = 0) {
-    const z = this._zv(seed), P = validPos(pos), v = this._voice(P_MED, P); if (!v) return;
+    const z = this._zv(seed), P = validPos(pos), v = this._voice(P_MED, P); if (!v) return NOOP_TRACK;
     const t = this._now(), dur = 0.75, f = z.f0 * 1.1;
     v.out.gain.value = 0.6;
     const { src, eg } = this._throat(v, t, dur, f, z, { vB: VOWELS[1], scale: 0.9, q: 6, rough: 9 + z.harsh * 6, depth: 0.8 });
@@ -477,6 +509,7 @@ export class AudioEngine {
     ahr(eg.gain, t, 0.02, 0.25, 0.45, 3.5);
     this._tone(v, v.out, t + 0.5, { f: 90, f2: 40, d: 0.25, peak: 0.8 });
     this._burst(v, v.out, t + 0.5, { kind: 'brown', type: 'lowpass', f: 450, a: 0.005, d: 0.3, peak: 0.8 });
+    return this._track(v);
   }
 
   zombieSpawn(pos) {
@@ -989,11 +1022,12 @@ export class AudioEngine {
     this.master = c.createGain();
     this.master.gain.value = this._mv;
     const comp = c.createDynamicsCompressor();
-    comp.threshold.value = -16;
-    comp.knee.value = 12;
-    comp.ratio.value = 3.5;
-    comp.attack.value = 0.004;
-    comp.release.value = 0.25;
+    // Peak limiter only: heavy compression would flatten the near/far dynamics.
+    comp.threshold.value = -8;
+    comp.knee.value = 6;
+    comp.ratio.value = 8;
+    comp.attack.value = 0.003;
+    comp.release.value = 0.2;
     link(this.master, comp, c.destination);
     this.sfx = c.createGain();
     this.sfxLP = c.createBiquadFilter();
@@ -1018,8 +1052,9 @@ export class AudioEngine {
       wet.gain.value = 0.9;
       link(conv, wet, this.master);
       const s1 = c.createGain();
-      s1.gain.value = 0.16;
+      s1.gain.value = 0.05;
       link(this.sfxLP, s1, conv);
+      this.revIn = conv;
       const s2 = c.createGain();
       s2.gain.value = 0.32;
       link(this.music, s2, conv);
@@ -1124,15 +1159,28 @@ export class AudioEngine {
     v.out = this._g(v, 1);
     let tail = v.out;
     if (P) {
-      if (d > 10) tail = link(tail, this._flt(v, 'lowpass', clamp(22000 * Math.pow(10 / d, 1.6), 900, 20000), 0.5));
+      // Walls between us muffle and quieten; distance dulls the top end (air absorption).
+      let occ = 0;
+      if (this.occlusion) { try { occ = clamp(fin(this.occlusion(P.x, P.y, P.z)), 0, 1); } catch { occ = 0; } }
+      const air = d > 4 ? clamp(18000 * Math.pow(4 / d, 1.2), 1100, 20000) : 20000;
+      const cutoff = occ > 0 ? Math.min(air, 500 + 1300 * (1 - occ)) : air;
+      if (cutoff < 19000) tail = link(tail, this._flt(v, 'lowpass', cutoff, 0.6));
+      tail = link(tail, this._g(v, SPATIAL_GAIN * (1 - 0.6 * occ)));
+      // Room feed: steady level while the direct sound falls off, so far sounds read as far.
+      if (this.revIn) {
+        const send = this._g(v, 0.035 * (1 + occ) * clamp(1.15 - d / 60, 0.45, 1));
+        tail.connect(send);
+        send.connect(this.revIn);
+      }
       const p = c.createPanner();
-      p.panningModel = 'equalpower';
-      p.distanceModel = 'inverse';
+      p.panningModel = this.hrtf && d < HRTF_DIST ? 'HRTF' : 'equalpower';
+      p.distanceModel = 'exponential';
       p.refDistance = REF_DIST;
       p.maxDistance = MAX_DIST;
       p.rolloffFactor = ROLLOFF;
       if (p.positionX) { p.positionX.value = P.x; p.positionY.value = P.y; p.positionZ.value = P.z; } else if (p.setPosition) p.setPosition(P.x, P.y, P.z);
       v.nodes.push(p);
+      v.panner = p;
       tail = link(tail, p);
     } else if (pan != null && typeof c.createStereoPanner === 'function') {
       const sp = c.createStereoPanner();

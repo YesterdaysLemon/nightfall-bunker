@@ -64,12 +64,20 @@
         </label>
         <label class="row check"><input id="setInvert" type="checkbox" /><span>Invert mouse Y</span></label>
         <label class="row check"><input id="setHrtf" type="checkbox" /><span>3D audio (best with headphones)</span></label>
+        <div class="touchOnly">
+          <label class="row"><span>Touch look speed</span><input id="setTouchSens" type="range" min="0.3" max="3" step="0.05" /></label>
+          <label class="row check"><input id="setAutoFire" type="checkbox" /><span>Auto-fire when aiming at a zombie</span></label>
+          <label class="row check"><input id="setAssist" type="checkbox" /><span>Aim assist</span></label>
+          <label class="row check"><input id="setGyro" type="checkbox" /><span>Gyro aiming (tilt to aim)</span></label>
+          <button id="btnEditTouch" type="button" class="small">Customize touch buttons</button>
+        </div>
       </details>
       <details class="controls">
         <summary>Controls</summary>
         <dl>
           <dt>WASD</dt><dd>Move</dd><dt>Shift</dt><dd>Sprint</dd><dt>Space</dt><dd>Jump</dd><dt>C / Ctrl</dt><dd>Crouch</dd>
           <dt>Mouse 1</dt><dd>Fire</dd><dt>Mouse 2</dt><dd>Aim</dd><dt>R</dt><dd>Reload</dd><dt>F (hold)</dt><dd>Buy · rebuild · revive</dd>
+          <dt>Touch</dt><dd>Left thumb moves (push to the edge to sprint), drag right side to aim</dd>
           <dt>V</dt><dd>Knife</dd><dt>G</dt><dd>Grenade</dd><dt>1 · 2 · wheel</dt><dd>Switch weapon</dd><dt>Tab</dt><dd>Scores</dd><dt>Enter</dt><dd>Chat</dd><dt>M</dt><dd>Mute</dd>
         </dl>
       </details>
@@ -101,7 +109,7 @@
       </div>
     </section>
 
-    <p id="deviceNote" class="note" hidden>This game needs a keyboard and mouse.</p>
+    <p id="deviceNote" class="note" hidden>Touch controls on: left thumb moves, right side aims, big button fires. Turn your phone sideways.</p>
     <footer class="foot">A fan-made homage to classic round-based zombies. All art and sound are generated in code.</footer>
   </main>
 
@@ -115,6 +123,8 @@
       </div>
     </div>
   </div>
+
+  <div id="rotate" aria-live="polite">Turn your phone sideways</div>
 
   <div id="loading"><div class="spin"></div><div id="loadingText">Loading…</div></div>
 

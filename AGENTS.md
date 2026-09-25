@@ -61,6 +61,9 @@ Real WWII weapon names are fine; the wonder weapon is the original Arc Pistol.
 - `npm run build && npm run smoke` — headless, muted Chromium plays round 1 and
   writes screenshots to `output/smoke/`. Use this (or `?mute&test` in a browser)
   instead of driving someone's visible browser.
+- `npm run touch-smoke` — headless phone (844x390, multi-touch via CDP): stick,
+  look, both thumbs, fire, context buy, auto-fire + aim assist, portrait prompt.
+  Touch controls live in `src/client/touch.js` and feed the shared `Input`.
 - `npm run audio-check` — silent: renders the audio engine offline and asserts
   direction (HRTF), distance falloff, wall occlusion and moving zombie voices.
 - `node scripts/mp-smoke.mjs --url <site>` — two headless browsers create and

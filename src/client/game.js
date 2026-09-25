@@ -566,7 +566,8 @@ export class Game {
     const W = WEAPONS[p.cur];
     const a = p.ammo[p.cur];
     if (!W || !a) return;
-    const trigger = W.auto ? I.mouse.left : I.hit('Mouse0');
+    const auto = I.touchMode && this.settings.touchAutoFire !== false && this.crosshairOnZombie(W);
+    const trigger = (W.auto ? I.mouse.left : I.hit('Mouse0')) || auto;
     if (!trigger) return;
     if (p.switchT > 0 || p.reloadT > 0 || p.fireT > 0 || p.knifeT > 0.3 || p.nadePending > 0) return;
     if (p.sprinting) { p.sprinting = false; }
@@ -680,14 +681,14 @@ export class Game {
     const near = (x, y, z, r) => Math.hypot(p.x - x, p.z - z) <= r && Math.abs(p.y - y) < 1.4;
     for (const pl of this.players.values()) {
       if (pl.id === this.me || pl.state !== PS.DOWN) continue;
-      if (near(pl.x, pl.y, pl.z, 1.6)) return { kind: 'revive', hold: true, label: `Hold <b>F</b> to revive ${escapeHtml(pl.name)}`, pl };
+      if (near(pl.x, pl.y, pl.z, 1.6)) return { kind: 'revive', hold: true, label: `Hold <b>F</b> to revive ${escapeHtml(pl.name)}`, short: `Revive ${pl.name}`, pl };
     }
     const B = MYSTERY_BOX;
     if (this.openDoors.has('debrisA') || this.openDoors.has('debrisB')) {
       if (near(B.pos[0], B.pos[1], B.pos[2], 2.1)) {
         const bs = this.boxState;
-        if (bs.state === 'ready' && bs.owner === this.me) return { kind: 'boxTake', label: `Press <b>F</b> to take the ${WEAPONS[bs.weapon].name}` };
-        if (bs.state === 'idle') return { kind: 'box', label: `Press <b>F</b> for a random weapon <span class="cost">[Cost: ${BOX_COST}]</span>`, cost: BOX_COST };
+        if (bs.state === 'ready' && bs.owner === this.me) return { kind: 'boxTake', label: `Press <b>F</b> to take the ${WEAPONS[bs.weapon].name}`, short: `Take ${WEAPONS[bs.weapon].name}` };
+        if (bs.state === 'idle') return { kind: 'box', label: `Press <b>F</b> for a random weapon <span class="cost">[Cost: ${BOX_COST}]</span>`, short: `Mystery box · ${BOX_COST}`, cost: BOX_COST };
       }
     }
     for (const wb of WALL_BUYS) {
@@ -698,22 +699,22 @@ export class Game {
       const W = WEAPONS[wb.weapon];
       const price = WALL_PRICES[wb.weapon];
       if (p.weapons.includes(wb.weapon)) {
-        return { kind: 'wall', id: wb.id, label: `Press <b>F</b> to buy ${W.name} ammo <span class="cost">[Cost: ${Math.round(price / 2)}]</span>`, cost: Math.round(price / 2) };
+        return { kind: 'wall', id: wb.id, label: `Press <b>F</b> to buy ${W.name} ammo <span class="cost">[Cost: ${Math.round(price / 2)}]</span>`, short: `Ammo · ${Math.round(price / 2)}`, cost: Math.round(price / 2) };
       }
-      return { kind: 'wall', id: wb.id, label: `Press <b>F</b> to buy ${W.name} <span class="cost">[Cost: ${price}]</span>`, cost: price };
+      return { kind: 'wall', id: wb.id, label: `Press <b>F</b> to buy ${W.name} <span class="cost">[Cost: ${price}]</span>`, short: `${W.name} · ${price}`, cost: price };
     }
     for (const d of DOORS) {
       if (this.openDoors.has(d.id)) continue;
       if (d.use.some((u) => near(u[0], u[1], u[2], 2.3))) {
         const verb = d.kind === 'door' ? 'open the door' : 'clear the debris';
-        return { kind: 'door', id: d.id, label: `Press <b>F</b> to ${verb} <span class="cost">[Cost: ${d.cost}]</span>`, cost: d.cost };
+        return { kind: 'door', id: d.id, label: `Press <b>F</b> to ${verb} <span class="cost">[Cost: ${d.cost}]</span>`, short: `${d.kind === 'door' ? 'Open door' : 'Clear debris'} · ${d.cost}`, cost: d.cost };
       }
     }
     for (const w of WINDOWS) {
       if (this.boards[w.id] >= MAX_BOARDS) continue;
-      if (near(w.repair[0], w.repair[1], w.repair[2], 1.3)) return { kind: 'repair', hold: true, label: 'Hold <b>F</b> to rebuild the barrier' };
+      if (near(w.repair[0], w.repair[1], w.repair[2], 1.3)) return { kind: 'repair', hold: true, label: 'Hold <b>F</b> to rebuild the barrier', short: 'Hold to rebuild' };
     }
-    if (near(RADIO.pos[0], 0, RADIO.pos[2], 1.6)) return { kind: 'radio', label: '' };
+    if (near(RADIO.pos[0], 0, RADIO.pos[2], 1.6)) return { kind: 'radio', label: '', short: 'Radio' };
     return null;
   }
 
@@ -722,7 +723,8 @@ export class Game {
     this.target = t;
     let label = t ? t.label : '';
     if (this.denyT > 0) { this.denyT -= dt; label = 'Not enough points'; }
-    this.hud.prompt(label);
+    this.hud.prompt(this.input.touchMode ? '' : label);
+    this.touch?.setUse(this.canAct() ? t : null);
     if (t && this.canAct() && this.input.hit('KeyF') && !t.hold) {
       if (t.kind === 'radio') this.conn.send({ t: 'radio' });
       else if (t.kind === 'box') this.conn.send({ t: 'buy', k: 'box' });
@@ -735,6 +737,53 @@ export class Game {
     else this.hud.revive(null);
   }
 
+  // Touch aim assist: a little friction and pull when the crosshair is near a
+  // zombie in view. Returns look friction and a yaw/pitch nudge for this frame.
+  aimAssist(dt) {
+    const p = this.p, I = this.input;
+    const cam = this.rig.camera;
+    cam.getWorldDirection(_dir);
+    const o = cam.position;
+    const CONE = 0.13;
+    let best = null, bestAng = CONE;
+    this.zombies.forEachTarget((id, zx, zy, zz, st) => {
+      if (st === ZS.RISE) return;
+      const vx = zx - o.x, vy = zy + 1.35 - o.y, vz = zz - o.z;
+      const d = Math.hypot(vx, vy, vz);
+      if (d > 28 || d < 0.5) return;
+      const ang = Math.acos(Math.max(-1, Math.min(1, (vx * _dir.x + vy * _dir.y + vz * _dir.z) / d)));
+      if (ang >= bestAng) return;
+      if (!this.world.lineOfSight(o.x, o.y, o.z, zx, zy + 1.35, zz)) return;
+      bestAng = ang;
+      best = { vx, vy, vz };
+    });
+    if (!best) return { friction: 1, dyaw: 0, dpitch: 0 };
+    let ey = Math.atan2(-best.vx, -best.vz) - p.yaw;
+    while (ey > Math.PI) ey -= Math.PI * 2;
+    while (ey < -Math.PI) ey += Math.PI * 2;
+    const ep = Math.atan2(best.vy, Math.hypot(best.vx, best.vz)) - p.pitch;
+    const moving = I.lookActive || Math.abs(I.move.x) + Math.abs(I.move.y) > 0.2;
+    const pull = (I.mouse.left ? 8 : moving ? 4 : 0) * (1 - 0.6 * bestAng / CONE);
+    const k = Math.min(1, pull * dt);
+    return { friction: 0.55 + 0.45 * (bestAng / CONE), dyaw: ey * k, dpitch: ep * k };
+  }
+
+  // Is the crosshair ray on a zombie within this weapon's range (and not behind a wall)?
+  crosshairOnZombie(W) {
+    if (!W || W.projectile || this.p.reloadT > 0) return false;
+    const cam = this.rig.camera;
+    cam.getWorldDirection(_dir);
+    const o = cam.position;
+    const range = Math.min(W.range, 35);
+    const wall = this.world.raycast(o.x, o.y, o.z, _dir.x, _dir.y, _dir.z, range);
+    let hit = false;
+    this.zombies.forEachTarget((id, zx, zy, zz, st) => {
+      if (hit || st === ZS.RISE) return;
+      if (zombieHitTest(o.x, o.y, o.z, _dir.x, _dir.y, _dir.z, zx, zy, zz, wall)) hit = true;
+    });
+    return hit;
+  }
+
   // --- Movement --------------------------------------------------------------------------------
   updatePlayer(dt) {
     const p = this.p, I = this.input, S = this.settings;
@@ -742,8 +791,13 @@ export class Game {
     const active = this.canAct();
     const zoom = 1 - this.vm.ads * 0.35;
     if (active) {
-      p.yaw -= I.mouse.dx * 0.0022 * S.sensitivity * zoom;
-      p.pitch -= I.mouse.dy * 0.0022 * S.sensitivity * zoom * (S.invert ? -1 : 1);
+      const assist = I.touchMode && S.touchAssist !== false ? this.aimAssist(dt) : null;
+      const friction = assist ? assist.friction : 1;
+      p.yaw -= I.mouse.dx * 0.0022 * S.sensitivity * zoom * friction;
+      p.pitch -= I.mouse.dy * 0.0022 * S.sensitivity * zoom * friction * (S.invert ? -1 : 1);
+      p.yaw += I.lookRad.yaw;
+      p.pitch += I.lookRad.pitch * (S.invert ? -1 : 1);
+      if (assist) { p.yaw += assist.dyaw; p.pitch += assist.dpitch; }
       p.pitch = Math.max(-1.52, Math.min(1.52, p.pitch));
     }
     const down = p.state === PS.DOWN, dead = p.state === PS.DEAD;
@@ -753,14 +807,16 @@ export class Game {
       if (I.down('KeyS')) fz += 1;
       if (I.down('KeyA')) fx -= 1;
       if (I.down('KeyD')) fx += 1;
+      if (I.move.x || I.move.y) { fx = I.move.x; fz = I.move.y; }
     }
-    const len = Math.hypot(fx, fz) || 1;
-    fx /= len; fz /= len;
+    // Keyboard diagonals normalise to 1; a half-pushed stick walks slower.
+    const len = Math.hypot(fx, fz);
+    if (len > 1) { fx /= len; fz /= len; }
     const crouchKey = active && (I.down('KeyC') || I.down('ControlLeft'));
     p.crouch += ((crouchKey || down ? 1 : 0) - p.crouch) * Math.min(1, dt * 10);
     const W = WEAPONS[p.cur];
     const ads = active && I.mouse.right && !down;
-    p.sprinting = active && !down && I.down('ShiftLeft') && fz < 0 && !ads && p.stamina > 0 && p.reloadT <= 0;
+    p.sprinting = active && !down && (I.down('ShiftLeft') || I.touchSprint) && fz < 0 && !ads && p.stamina > 0 && p.reloadT <= 0;
     if (p.sprinting) p.stamina = Math.max(0, p.stamina - dt);
     else p.stamina = Math.min(4, p.stamina + dt * (I.down('ShiftLeft') ? 0.3 : 0.9));
     let speed = p.sprinting ? SPRINT : WALK;

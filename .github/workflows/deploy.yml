@@ -54,6 +54,7 @@ jobs:
           set -euo pipefail
           npx playwright install --with-deps chromium-headless-shell
           npm run smoke
+          npm run touch-smoke
           npm run audio-check
       - name: Keep smoke screenshots
         if: always()

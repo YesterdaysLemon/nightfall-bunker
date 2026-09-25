@@ -4,11 +4,15 @@ import { Game } from './game.js';
 import { LocalConnection, WsConnection, lobbyApi, sessionToken } from './net.js';
 import { PROTOCOL, REGIONS, MAX_PLAYERS, PLAYER_COLORS } from '../shared/protocol.js';
 import { escapeHtml } from './hud.js';
+import { TouchControls } from './touch.js';
 
 const $ = (id) => document.getElementById(id);
 const screens = ['screenMain', 'screenLobby', 'screenOver'];
 
-const DEFAULTS = { name: '', sensitivity: 1, fov: 80, volume: 0.8, quality: 'medium', invert: false, hrtf: true };
+const DEFAULTS = {
+  name: '', sensitivity: 1, fov: 80, volume: 0.8, quality: 'medium', invert: false, hrtf: true,
+  touchSens: 1, touchAutoFire: true, touchAssist: true, gyro: false,
+};
 
 function loadSettings() {
   try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem('nb_settings') || '{}') }; } catch { return { ...DEFAULTS }; }
@@ -35,8 +39,23 @@ try {
 $('loading').classList.add('done');
 if (import.meta.env.DEV || params.has('test')) window.__game = game;
 
+// --- Touch ----------------------------------------------------------------------------
+const touch = new TouchControls(game.input, { settings, onPause: () => game.input.setLocked(false) });
+game.touch = touch;
+touch.onEditDone = () => { $('menu').hidden = false; };
+function enableTouch() {
+  if (game.input.touchMode) return;
+  game.input.touchMode = true;
+  document.body.classList.add('touch');
+  $('deviceNote').hidden = false;
+}
 const coarse = matchMedia('(pointer: coarse)').matches && !matchMedia('(pointer: fine)').matches;
-$('deviceNote').hidden = !coarse;
+if (coarse || params.has('touch')) {
+  enableTouch();
+  // Phones: start on the light graphics preset unless the player chose one.
+  if (!localStorage.getItem('nb_settings')?.includes('"quality"')) { settings.quality = 'low'; game.applySettings(settings); }
+}
+addEventListener('pointerdown', (e) => { if (e.pointerType === 'touch') enableTouch(); }, { capture: true, passive: true });
 
 // --- Settings UI ----------------------------------------------------------------------
 const nameInput = $('nameInput');
@@ -47,6 +66,10 @@ $('setVol').value = settings.volume;
 $('setQuality').value = settings.quality;
 $('setInvert').checked = settings.invert;
 $('setHrtf').checked = settings.hrtf;
+$('setTouchSens').value = settings.touchSens;
+$('setAutoFire').checked = settings.touchAutoFire;
+$('setAssist').checked = settings.touchAssist;
+$('setGyro').checked = false;
 const syncSettings = () => {
   settings.name = nameInput.value.trim().slice(0, 16) || settings.name;
   settings.sensitivity = Number($('setSens').value);
@@ -55,17 +78,34 @@ const syncSettings = () => {
   settings.quality = $('setQuality').value;
   settings.invert = $('setInvert').checked;
   settings.hrtf = $('setHrtf').checked;
+  settings.touchSens = Number($('setTouchSens').value);
+  settings.touchAutoFire = $('setAutoFire').checked;
+  settings.touchAssist = $('setAssist').checked;
   saveSettings(settings);
   game.applySettings(settings);
 };
-for (const id of ['nameInput', 'setSens', 'setFov', 'setVol', 'setQuality', 'setInvert', 'setHrtf']) $(id).addEventListener('change', syncSettings);
+$('setGyro').addEventListener('change', async () => {
+  const want = $('setGyro').checked;
+  const ok = await touch.setGyro(want);
+  if (want && !ok) { $('setGyro').checked = false; $('mainError').textContent = 'Gyro aiming is not available on this device.'; }
+  settings.gyro = $('setGyro').checked;
+});
+$('btnEditTouch').addEventListener('click', () => { $('menu').hidden = true; touch.edit(true); });
+for (const id of ['nameInput', 'setSens', 'setFov', 'setVol', 'setQuality', 'setInvert', 'setHrtf', 'setTouchSens', 'setAutoFire', 'setAssist']) $(id).addEventListener('change', syncSettings);
 
 function show(screen) {
   $('menu').hidden = !screen;
   for (const s of screens) $(s).hidden = s !== screen;
 }
 
-function unlockAudio() { game.audio.unlock(); }
+// Runs inside the click that starts play: audio unlock, and on phones fullscreen + landscape.
+function unlockAudio() {
+  game.audio.unlock();
+  if (!game.input.touchMode) return;
+  const el = document.documentElement;
+  const fs = el.requestFullscreen?.({ navigationUI: 'hide' });
+  if (fs?.then) fs.then(() => screen.orientation?.lock?.('landscape')).catch(() => {});
+}
 
 // --- Game events ------------------------------------------------------------------------
 let session = null; // { kind: 'solo' | 'mp', party?: WsConnection, code?, match? }
@@ -74,7 +114,9 @@ game.onEvent = (e) => {
   if (e.type === 'started') {
     show(null);
     $('pause').hidden = true;
+    document.body.classList.add('playing');
     game.input.lock();
+    touch.show(game.input.touchMode);
   } else if (e.type === 'error') {
     leaveGame();
     show(session?.party ? 'screenLobby' : 'screenMain');
@@ -110,7 +152,9 @@ addEventListener('keydown', (e) => {
 game.input.onLockChange = (locked) => {
   if (game.mode !== 'play') return;
   $('pause').hidden = locked;
-  $('pauseSub').textContent = session?.kind === 'solo' ? 'The game is paused. Click to resume.' : 'The match keeps running while you are away.';
+  touch.show(locked && game.input.touchMode);
+  const verb = game.input.touchMode ? 'Tap Resume' : 'Click';
+  $('pauseSub').textContent = session?.kind === 'solo' ? `The game is paused. ${verb} to continue.` : 'The match keeps running while you are away.';
   game.pause(!locked && session?.kind === 'solo');
 };
 
@@ -119,6 +163,8 @@ $('view').addEventListener('click', () => { if (game.mode === 'play' && !game.in
 $('btnQuit').onclick = () => { leaveGame(); backToMenu(); };
 
 function leaveGame() {
+  touch.show(false);
+  document.body.classList.remove('playing');
   game.stop();
   $('pause').hidden = true;
   game.hud.show(false);

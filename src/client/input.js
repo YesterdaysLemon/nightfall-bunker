@@ -16,6 +16,12 @@ export class Input {
     this.enabled = false;
     this.typing = false;
     this.fallback = false;
+    // Touch: analog stick vector, sprint, look in radians (gyro), no pointer lock.
+    this.touchMode = false;
+    this.move = { x: 0, y: 0 };
+    this.touchSprint = false;
+    this.lookRad = { yaw: 0, pitch: 0 };
+    this.lookActive = false;
     this.onLockChange = null;
     this.onFallback = null;
     this.onNeedClick = null;
@@ -70,12 +76,17 @@ export class Input {
     if (this.locked === on) return;
     this.locked = on;
     document.body.classList.toggle('freelook', on && this.fallback);
-    if (!on) { this.keys.clear(); this.mouse.left = this.mouse.right = false; }
+    if (!on) {
+      this.keys.clear();
+      this.mouse.left = this.mouse.right = false;
+      this.move.x = this.move.y = 0;
+      this.touchSprint = false;
+    }
     this.onLockChange?.(on);
   }
 
   lock() {
-    if (this.fallback) { this.setLocked(true); return; }
+    if (this.fallback || this.touchMode) { this.setLocked(true); return; }
     const attempt = (opts) => {
       const p = this.canvas.requestPointerLock(opts);
       return p && p.then ? p : Promise.resolve();
@@ -105,7 +116,7 @@ export class Input {
   }
 
   unlock() {
-    if (this.fallback) { this.setLocked(false); return; }
+    if (this.fallback || this.touchMode) { this.setLocked(false); return; }
     if (document.pointerLockElement) document.exitPointerLock();
   }
 
@@ -128,5 +139,8 @@ export class Input {
     this.mouse.dx = 0;
     this.mouse.dy = 0;
     this.mouse.wheel = 0;
+    this.lookRad.yaw = 0;
+    this.lookRad.pitch = 0;
+    this.lookActive = false;
   }
 }

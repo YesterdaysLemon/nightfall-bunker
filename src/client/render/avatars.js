@@ -35,11 +35,11 @@ export class Avatars {
     this.scene = scene;
     this.tex = tex;
     this.map = new Map();
-    this.jacket = new THREE.MeshLambertMaterial({ map: tex.uniform, color: 0x7d8457 });
-    this.trousers = new THREE.MeshLambertMaterial({ map: tex.uniform, color: 0x6a6a4c });
+    this.jacket = new THREE.MeshLambertMaterial({ map: tex.uniform, color: 0xd8dcb0 });
+    this.trousers = new THREE.MeshLambertMaterial({ map: tex.uniform, color: 0xb4b490 });
     this.skin = new THREE.MeshLambertMaterial({ map: tex.playerSkin });
     this.boots = new THREE.MeshLambertMaterial({ color: 0x2a2118 });
-    this.helmet = new THREE.MeshLambertMaterial({ map: tex.metal, color: 0x6d7352 });
+    this.helmet = new THREE.MeshLambertMaterial({ map: tex.metal, color: 0xa8b08a });
   }
 
   create(id, name, slot) {

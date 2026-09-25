@@ -154,3 +154,17 @@ test('region choice minimises the worst ping', () => {
   const r = chooseRegion([{ weur: 20, enam: 90 }, { weur: 110, enam: 40 }], ['weur', 'enam']);
   assert.equal(r.region, 'enam');
 });
+
+test('a thrown grenade explodes and kills a nearby zombie', () => {
+  const sim = new GameSim({ seed: 11 });
+  const p = sim.addPlayer('p', 'P');
+  sim.phase = 'round'; sim.toSpawn = 0;
+  sim.zombies.set(99, { id: 99, cls: 0, speed: 0, hp: 150, maxHp: 150, x: 0, y: 0, z: -3, yaw: 0, state: ZS.CHASE, t: 0, win: null, lv: 0, atk: 0, cell: -1, stuck: 0, cool: 99 });
+  sim.handle('p', { t: 'nade', o: [0, 1.5, -1], v: [0, 2, -3] });
+  assert.equal(p.grenades, 1);
+  const seen = [];
+  for (let i = 0; i < 70; i++) { sim.step(); seen.push(...sim.drainEvents().map((e) => e[0])); }
+  assert.ok(seen.includes('boom'), 'grenade exploded');
+  assert.ok(!sim.zombies.has(99), 'zombie killed by the blast');
+  assert.ok(p.points > 500, 'owner got points');
+});

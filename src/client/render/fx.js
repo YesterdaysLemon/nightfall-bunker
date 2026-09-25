@@ -2,7 +2,7 @@
 // grenades and power-ups. Nothing here allocates per frame.
 
 import * as THREE from 'three';
-import { EXTERIOR, LIGHTS } from '../../shared/map.js';
+import { LIGHTS } from '../../shared/map.js';
 import { stepBody } from '../../shared/sim.js';
 import { buildGrenade, buildPowerupModel } from './weapons3d.js';
 
@@ -104,6 +104,22 @@ class Particles {
   }
 }
 
+// Soft round falloff for additive sprites (without a map they draw as squares).
+function glowTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d');
+  const grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grd.addColorStop(0, 'rgba(255,255,255,1)');
+  grd.addColorStop(0.3, 'rgba(255,255,255,0.45)');
+  grd.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grd;
+  g.fillRect(0, 0, 64, 64);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
 function holeTexture() {
   const c = document.createElement('canvas');
   c.width = c.height = 64;
@@ -184,8 +200,9 @@ export class FX {
     this.shake = 0;
     this.orbMat = new THREE.MeshBasicMaterial({ color: 0x9ffcff });
     this.rocketMat = new THREE.MeshLambertMaterial({ color: 0x3d4430 });
-    this.flashMat = new THREE.SpriteMaterial({ color: 0xffd08a, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true });
-    this.glowMat = new THREE.SpriteMaterial({ color: 0x66ff88, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.5 });
+    const glow = glowTexture();
+    this.flashMat = new THREE.SpriteMaterial({ map: glow, color: 0xffd08a, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true });
+    this.glowMat = new THREE.SpriteMaterial({ map: glow, color: 0x66ff88, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.55 });
     this.flashPool = Array.from({ length: 8 }, () => {
       const s = new THREE.Sprite(this.flashMat);
       s.visible = false; s.scale.setScalar(0.4);
@@ -451,4 +468,3 @@ function randDir(s) {
   return [Math.cos(a) * r * s, u * s, Math.sin(a) * r * s];
 }
 
-export { EXTERIOR };

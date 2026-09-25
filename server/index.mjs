@@ -68,13 +68,11 @@ async function serveStatic(req, res, url) {
   let rel = decodeURIComponent(url.pathname);
   if (rel.endsWith('/')) rel += 'index.html';
   const file = path.normalize(path.join(dist, rel));
-  if (!file.startsWith(dist + path.sep) || rel.includes('\0')) return json(res, 404, { error: 'not found' });
+  const hidden = rel.split('/').some((seg) => seg.startsWith('.'));
+  if (!file.startsWith(dist + path.sep) || rel.includes('\0') || hidden) return json(res, 404, { error: 'not found' });
   let st;
   try { st = await stat(file); } catch { st = null; }
-  if (!st || !st.isFile()) {
-    if (path.extname(rel)) return json(res, 404, { error: 'not found' });
-    return serveStatic(req, res, new URL('/index.html', url));
-  }
+  if (!st || !st.isFile()) return json(res, 404, { error: 'not found' });
   const ext = path.extname(file);
   const immutable = rel.startsWith('/assets/');
   res.writeHead(200, {

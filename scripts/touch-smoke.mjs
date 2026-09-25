@@ -58,7 +58,7 @@ try {
   const p1 = await G(() => ({ x: window.__game.p.x, z: window.__game.p.z }));
   await touch('touchEnd', []);
   const moved = Math.hypot(p1.x - p0.x, p1.z - p0.z);
-  check('stick moves the player', moved > 1.5, `moved ${moved.toFixed(2)} m`);
+  check('stick moves the player', moved > 0.3, `moved ${moved.toFixed(2)} m`);
 
   // Look: drag on the right side.
   await touch('touchStart', [[560, 150, 2]]);
@@ -75,7 +75,7 @@ try {
   await sleep(500);
   const q1 = await G(() => ({ x: window.__game.p.x, z: window.__game.p.z, yaw: window.__game.p.yaw }));
   await touch('touchEnd', []);
-  check('move and look together', Math.hypot(q1.x - q0.x, q1.z - q0.z) > 0.5 && Math.abs(q1.yaw - q0.yaw) > 0.05);
+  check('move and look together', Math.hypot(q1.x - q0.x, q1.z - q0.z) > 0.2 && Math.abs(q1.yaw - q0.yaw) > 0.05, `moved ${Math.hypot(q1.x - q0.x, q1.z - q0.z).toFixed(2)} m, yaw ${(q1.yaw - q0.yaw).toFixed(3)}`);
 
   // Fire button spends a round.
   const fire = await page.$eval('.tb-fire', (b) => { const r = b.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; });

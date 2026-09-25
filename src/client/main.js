@@ -38,6 +38,9 @@ try {
 }
 $('loading').classList.add('done');
 if (import.meta.env.DEV || params.has('test')) window.__game = game;
+// Automated runs must never request pointer lock: headless Chromium on Windows
+// implements it by clipping the real system cursor to its invisible window.
+if (params.has('test')) game.input.fallback = true;
 
 // --- Touch ----------------------------------------------------------------------------
 const touch = new TouchControls(game.input, { settings, onPause: () => game.input.setLocked(false) });

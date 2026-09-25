@@ -43,7 +43,8 @@ export class Input {
       this.mouse.x = e.clientX;
       this.mouse.y = e.clientY;
       this.mouse.over = e.target === canvas;
-      if (!this.locked) return;
+      // Touch look comes from the touch layer; ignore compatibility mouse events.
+      if (!this.locked || this.touchMode) return;
       if (this.fallback && !this.mouse.over) return;
       // Ignore the occasional huge jump some browsers emit on lock.
       if (Math.abs(e.movementX) > 400 || Math.abs(e.movementY) > 400) return;
@@ -122,7 +123,7 @@ export class Input {
 
   // Free-look edge turning, accumulated as virtual mouse travel.
   beginFrame(dt) {
-    if (!this.fallback || !this.locked || !this.mouse.over) return;
+    if (!this.fallback || this.touchMode || !this.locked || !this.mouse.over) return;
     const w = innerWidth, h = innerHeight, { x, y } = this.mouse;
     const ex = EDGE * w, ey = EDGE * h;
     if (x < ex) this.mouse.dx -= ((ex - x) / ex) * EDGE_SPEED * dt;

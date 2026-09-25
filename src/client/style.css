@@ -1,4 +1,8 @@
 :root {
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
   --bg: #0b0d10;
   --ink: #ece6d6;
   --ink-dim: #a39c8b;
@@ -16,7 +20,8 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); 
 body { font-family: var(--type); -webkit-font-smoothing: antialiased; }
 [hidden] { display: none !important; }
 
-#view { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; cursor: crosshair; }
+/* dvh: the visible height, so Safari's toolbars never hide the bottom of the game. */
+#view { position: fixed; inset: 0; width: 100vw; height: 100vh; height: 100dvh; display: block; cursor: crosshair; }
 body.freelook #view { cursor: none; }
 
 button, input, select { font: inherit; color: inherit; }
@@ -198,11 +203,11 @@ body.touch #view { touch-action: none; }
 #rotate { display: none; position: fixed; inset: 0; z-index: 60; background: var(--bg); place-content: center; text-align: center; font-family: var(--stencil); font-size: 1.6rem; padding: 24px; }
 @media (orientation: portrait) { body.touch.playing #rotate { display: grid; } }
 /* HUD moves out from under the thumbs. */
-body.touch #tally { top: 6px; bottom: auto; left: 8px; width: 150px; height: 62px; }
-body.touch #ammo { top: 6px; bottom: auto; right: 58px; }
+body.touch #tally { top: calc(6px + var(--sat)); bottom: auto; left: calc(8px + var(--sal)); width: 150px; height: 62px; }
+body.touch #ammo { top: calc(6px + var(--sat)); bottom: auto; right: calc(58px + var(--sar)); }
 body.touch #ammoCount { font-size: 1.7rem; }
 body.touch #reserve { font-size: 1.1rem; }
-body.touch #scores { top: 70px; bottom: auto; right: 58px; }
+body.touch #scores { top: calc(70px + var(--sat)); bottom: auto; right: calc(58px + var(--sar)); }
 body.touch .score { font-size: 1.15rem; }
 body.touch #prompt, body.touch #chatlog, body.touch #chatInput { display: none; }
 body.touch #powerups { top: 52px; }
@@ -220,3 +225,9 @@ body.touch #reviveBar { top: 36%; }
   .actions .primary { font-size: 1rem; }
   button, input, select { min-height: 40px; }
 }
+
+/* Install tip / button (iPhone: Add to Home Screen; Chrome: install prompt). */
+.install { border: 1px dashed rgba(255, 226, 122, 0.5); padding: 0.6rem; font-size: 0.88rem; color: #ffe27a; }
+.install p { margin: 0 0 0.5rem; }
+.install .row2 { display: flex; gap: 0.5rem; }
+#menu { padding-left: max(clamp(16px, 5vw, 64px), var(--sal)); padding-right: max(16px, var(--sar)); }

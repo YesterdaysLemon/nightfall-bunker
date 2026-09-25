@@ -64,6 +64,10 @@ Real WWII weapon names are fine; the wonder weapon is the original Arc Pistol.
 - `npm run touch-smoke` — headless phone (844x390, multi-touch via CDP): stick,
   look, both thumbs, fire, context buy, auto-fire + aim assist, portrait prompt.
   Touch controls live in `src/client/touch.js` and feed the shared `Input`.
+- `npm run ios-smoke` — WebKit (Safari engine) as an iPhone: install tip, web
+  app manifest + icons, canvas fits the visible height (dvh), touch controls.
+  iPhone Safari cannot fullscreen a page; Add to Home Screen (manifest
+  `display: fullscreen`) is the fullscreen path. `npm run icons` redraws icons.
 - `npm run audio-check` — silent: renders the audio engine offline and asserts
   direction (HRTF), distance falloff, wall occlusion and moving zombie voices.
 - `node scripts/mp-smoke.mjs --url <site>` — two headless browsers create and

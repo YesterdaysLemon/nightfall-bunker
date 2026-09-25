@@ -101,14 +101,54 @@ function show(screen) {
   for (const s of screens) $(s).hidden = s !== screen;
 }
 
+// Installed (Home Screen / app window) vs a browser tab.
+const standalone = matchMedia('(display-mode: fullscreen), (display-mode: standalone)').matches || navigator.standalone === true;
+document.body.classList.toggle('standalone', standalone);
+
 // Runs inside the click that starts play: audio unlock, and on phones fullscreen + landscape.
+// iPhone Safari has no page fullscreen; the Home Screen app is fullscreen already.
 function unlockAudio() {
   game.audio.unlock();
   if (!game.input.touchMode) return;
+  const lock = () => screen.orientation?.lock?.('landscape')?.catch?.(() => {});
+  if (standalone) { lock(); return; }
   const el = document.documentElement;
-  const fs = el.requestFullscreen?.({ navigationUI: 'hide' });
-  if (fs?.then) fs.then(() => screen.orientation?.lock?.('landscape')).catch(() => {});
+  const req = el.requestFullscreen || el.webkitRequestFullscreen;
+  try {
+    const fs = req?.call(el, { navigationUI: 'hide' });
+    if (fs?.then) fs.then(lock).catch(() => {});
+  } catch { /* not allowed here */ }
 }
+
+// Install: Chrome/Edge/Android offer a real prompt; iOS needs Share -> Add to Home Screen.
+const ios = /iP(hone|od|ad)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+let installPrompt = null;
+function showInstall(text, canPrompt) {
+  try { if (localStorage.getItem('nb_install_dismissed')) return; } catch { /* ignore */ }
+  $('installText').textContent = text;
+  $('btnInstall').hidden = !canPrompt;
+  $('install').hidden = false;
+}
+addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  installPrompt = e;
+  showInstall('Install Nightfall Bunker as an app: it opens fullscreen, straight into the game.', true);
+});
+if (ios && !standalone) {
+  showInstall('For fullscreen on iPhone and iPad: tap Share, then \u201cAdd to Home Screen\u201d, and open Nightfall from your Home Screen.', false);
+}
+$('btnInstall').addEventListener('click', async () => {
+  if (!installPrompt) return;
+  installPrompt.prompt();
+  await installPrompt.userChoice.catch(() => null);
+  installPrompt = null;
+  $('install').hidden = true;
+});
+$('btnInstallDismiss').addEventListener('click', () => {
+  $('install').hidden = true;
+  try { localStorage.setItem('nb_install_dismissed', '1'); } catch { /* ignore */ }
+});
+addEventListener('appinstalled', () => { $('install').hidden = true; });
 
 // --- Game events ------------------------------------------------------------------------
 let session = null; // { kind: 'solo' | 'mp', party?: WsConnection, code?, match? }

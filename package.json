@@ -18,7 +18,9 @@
     "dev:worker": "wrangler dev",
     "smoke": "node scripts/smoke.mjs",
     "audio-check": "node scripts/audio-check.mjs",
-    "touch-smoke": "node scripts/touch-smoke.mjs"
+    "touch-smoke": "node scripts/touch-smoke.mjs",
+    "ios-smoke": "node scripts/ios-smoke.mjs",
+    "icons": "node scripts/make-icons.mjs"
   },
   "dependencies": {
     "ws": "8.21.3"

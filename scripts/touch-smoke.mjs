@@ -122,6 +122,14 @@ try {
   check('auto-fire with aim assist hits', pts > 0, `points +${pts}`);
   await shot('04-autofire');
 
+  // Notch / home-indicator insets push the controls inward.
+  const leftOf = () => page.$eval('.tb-fire2', (b) => b.getBoundingClientRect().left);
+  const l0 = await leftOf();
+  await G(() => { document.documentElement.style.setProperty('--sal', '48px'); window.__game.touch.applyLayout(); });
+  const l1 = await leftOf();
+  await G(() => { document.documentElement.style.removeProperty('--sal'); window.__game.touch.applyLayout(); });
+  check('safe-area insets respected', l1 - l0 > 40, `shifted ${Math.round(l1 - l0)} px`);
+
   // Layout editor.
   await G(() => window.__game.touch.edit(true));
   await sleep(200);

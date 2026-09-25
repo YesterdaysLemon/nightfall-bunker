@@ -52,9 +52,10 @@ jobs:
       - name: Headless play-through (round 1)
         run: |
           set -euo pipefail
-          npx playwright install --with-deps chromium-headless-shell
+          npx playwright install --with-deps chromium-headless-shell webkit
           npm run smoke
           npm run touch-smoke
+          npm run ios-smoke
           npm run audio-check
       - name: Keep smoke screenshots
         if: always()

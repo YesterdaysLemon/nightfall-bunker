@@ -102,7 +102,13 @@ export class TouchControls {
     el.addEventListener('pointercancel', (e) => this.up(e));
     el.addEventListener('contextmenu', (e) => e.preventDefault());
     this.toolbar.addEventListener('click', (e) => this.toolbarAction(e));
-    addEventListener('resize', () => this.applyLayout());
+    this.probe = document.createElement('div');
+    this.probe.style.cssText = 'position:fixed;visibility:hidden;pointer-events:none;padding:var(--sat) var(--sar) var(--sab) var(--sal)';
+    document.body.append(this.probe);
+    const relayout = () => this.applyLayout();
+    addEventListener('resize', relayout);
+    addEventListener('orientationchange', () => setTimeout(relayout, 250));
+    globalThis.visualViewport?.addEventListener('resize', relayout);
     this.applyLayout();
   }
 
@@ -110,17 +116,26 @@ export class TouchControls {
     return Math.max(0.8, Math.min(1.6, Math.min(innerWidth, innerHeight) / 390)) * this.layout.scale;
   }
 
+  // Safe rectangle: the screen minus notch / home-indicator insets.
+  safe() {
+    const cs = getComputedStyle(this.probe);
+    const l = parseFloat(cs.paddingLeft) || 0, r = parseFloat(cs.paddingRight) || 0;
+    const t = parseFloat(cs.paddingTop) || 0, b = parseFloat(cs.paddingBottom) || 0;
+    return { l, t, w: innerWidth - l - r, h: innerHeight - t - b };
+  }
+
   applyLayout() {
     const k = this.scale;
-    const w = innerWidth, h = innerHeight;
+    const S = this.safe();
+    this.safeRect = S;
     for (const [id, b] of Object.entries(this.buttons)) {
       const L = this.layout.buttons[id];
       const s = L.s * k;
       b.style.width = id === 'use' ? 'auto' : `${s}px`;
       b.style.minWidth = id === 'use' ? `${s * 2.4}px` : '';
       b.style.height = `${s}px`;
-      b.style.left = `${L.x * w}px`;
-      b.style.top = `${L.y * h}px`;
+      b.style.left = `${S.l + L.x * S.w}px`;
+      b.style.top = `${S.t + L.y * S.h}px`;
     }
     this.el.style.setProperty('--tb-opacity', String(this.layout.opacity));
     this.stickR = STICK_R * k;
@@ -133,9 +148,10 @@ export class TouchControls {
   }
 
   parkStick() {
+    const S = this.safeRect || { l: 0, t: 0, w: innerWidth, h: innerHeight };
     this.stick.classList.remove('live');
-    this.stick.style.left = `${0.14 * innerWidth}px`;
-    this.stick.style.top = `${0.72 * innerHeight}px`;
+    this.stick.style.left = `${S.l + 0.14 * S.w}px`;
+    this.stick.style.top = `${S.t + 0.72 * S.h}px`;
     this.stick.firstChild.style.transform = 'translate(-50%, -50%)';
   }
 
@@ -210,8 +226,9 @@ export class TouchControls {
     const I = this.input;
     if (st.role === 'edit') {
       const L = this.layout.buttons[st.id];
-      L.x = Math.max(0.03, Math.min(0.97, e.clientX / innerWidth));
-      L.y = Math.max(0.05, Math.min(0.95, e.clientY / innerHeight));
+      const S = this.safeRect;
+      L.x = Math.max(0.03, Math.min(0.97, (e.clientX - S.l) / S.w));
+      L.y = Math.max(0.05, Math.min(0.95, (e.clientY - S.t) / S.h));
       this.applyLayout();
       return;
     }

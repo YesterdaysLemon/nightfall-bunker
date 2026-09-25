@@ -7,6 +7,12 @@
   <meta name="description" content="Co-op zombie survival in an abandoned airfield bunker. Board the windows, buy your guns off the walls, survive the night. Up to 4 players." />
   <meta name="theme-color" content="#0b0d10" />
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Nightfall" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Special+Elite&family=Stardos+Stencil:wght@400;700&display=swap" />
@@ -44,6 +50,13 @@
     </header>
 
     <section id="screenMain" class="panel">
+      <div id="install" class="install" hidden>
+        <p id="installText"></p>
+        <div class="row2">
+          <button id="btnInstall" type="button" class="small primary" hidden>Install app</button>
+          <button id="btnInstallDismiss" type="button" class="small">Not now</button>
+        </div>
+      </div>
       <label class="field"><span>Name</span><input id="nameInput" maxlength="16" autocomplete="nickname" spellcheck="false" /></label>
       <div class="actions">
         <button id="btnSolo" class="primary">Play solo</button>

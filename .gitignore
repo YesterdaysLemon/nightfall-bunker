@@ -1,0 +1,8 @@
+node_modules/
+dist/
+dist-worker/
+.wrangler/
+output/
+*.log
+.DS_Store
+scratch-preview.html

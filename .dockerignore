@@ -1,0 +1,14 @@
+node_modules
+dist
+dist-worker
+.wrangler
+output
+tests
+.github
+.claude
+.agents
+*.md
+.git
+!.git/HEAD
+!.git/refs
+!.git/packed-refs

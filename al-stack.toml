@@ -1,0 +1,21 @@
+# Managed by al-stack. Keep extended prose in AGENTS.md.
+"schema" = 1
+
+["project"]
+"id" = "bf7c3e66-7942-44d7-82b2-41bf3f68b8a9"
+"name" = "nightfall-bunker"
+"status" = "experimental"
+"profile" = "web"
+"purpose" = "Co-op round-based zombie survival FPS in Three.js (up to 4 players) with edge-placed Cloudflare Durable Object lobbies; site deployed via Deploy Manager at zombies.alirezaafshan.com"
+
+["stack"]
+"version" = "0.1.0"
+"revision" = "11eac15f6a8a0dc76f06ef97c7c3a27c7f668e0a+dirty.6fb7933644af4e9c"
+
+["commands"]
+"dev" = "npm run dev"
+"test" = "npm test"
+"check" = "npm run check"
+"build" = "npm run build"
+"worker" = "npm run build:worker"
+"start" = "npm start"

@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Nightfall Bunker</title>
+  <meta name="description" content="Co-op zombie survival in an abandoned airfield bunker. Board the windows, buy your guns off the walls, survive the night. Up to 4 players." />
+  <meta name="theme-color" content="#0b0d10" />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Special+Elite&family=Stardos+Stencil:wght@400;700&display=swap" />
+  <link rel="stylesheet" href="/src/client/style.css" />
+</head>
+<body>
+  <canvas id="view" aria-label="Game view"></canvas>
+
+  <div id="hud" hidden>
+    <canvas id="tally" width="360" height="150" aria-label="Round"></canvas>
+    <div id="scores" aria-live="polite"></div>
+    <div id="ammo">
+      <div id="weaponName"></div>
+      <div id="ammoCount"><span id="mag">8</span><span class="sep">/</span><span id="reserve">32</span></div>
+      <div id="nades"></div>
+    </div>
+    <div id="prompt" role="status"></div>
+    <div id="crosshair"><i></i><i></i><i></i><i></i></div>
+    <div id="powerups"></div>
+    <div id="hurt"></div>
+    <div id="hurtDir"></div>
+    <div id="downed" hidden><div class="title">You are down</div><div class="sub">Hold on. A teammate can revive you.</div><div class="bar"><i></i></div></div>
+    <div id="reviveBar" hidden><div class="label"></div><div class="bar"><i></i></div></div>
+    <div id="center"></div>
+    <div id="netinfo"></div>
+    <div id="chatlog"></div>
+    <input id="chatInput" maxlength="120" placeholder="Say something…" hidden />
+    <div id="scoreboard" hidden></div>
+  </div>
+
+  <main id="menu">
+    <header class="brand">
+      <h1>Nightfall <span>Bunker</span></h1>
+      <p class="tag">Board the windows. Buy your guns off the walls. Survive the night.</p>
+    </header>
+
+    <section id="screenMain" class="panel">
+      <label class="field"><span>Name</span><input id="nameInput" maxlength="16" autocomplete="nickname" spellcheck="false" /></label>
+      <div class="actions">
+        <button id="btnSolo" class="primary">Play solo</button>
+        <button id="btnQuick">Quick match</button>
+        <button id="btnCreate">Create lobby</button>
+        <div class="join">
+          <input id="codeInput" maxlength="4" placeholder="CODE" autocomplete="off" spellcheck="false" aria-label="Lobby code" />
+          <button id="btnJoin">Join</button>
+        </div>
+      </div>
+      <details class="settings">
+        <summary>Settings</summary>
+        <label class="row"><span>Mouse sensitivity</span><input id="setSens" type="range" min="0.2" max="3" step="0.05" /></label>
+        <label class="row"><span>Field of view</span><input id="setFov" type="range" min="65" max="100" step="1" /></label>
+        <label class="row"><span>Volume</span><input id="setVol" type="range" min="0" max="1" step="0.05" /></label>
+        <label class="row"><span>Graphics</span>
+          <select id="setQuality"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select>
+        </label>
+        <label class="row check"><input id="setInvert" type="checkbox" /><span>Invert mouse Y</span></label>
+      </details>
+      <details class="controls">
+        <summary>Controls</summary>
+        <dl>
+          <dt>WASD</dt><dd>Move</dd><dt>Shift</dt><dd>Sprint</dd><dt>Space</dt><dd>Jump</dd><dt>C / Ctrl</dt><dd>Crouch</dd>
+          <dt>Mouse 1</dt><dd>Fire</dd><dt>Mouse 2</dt><dd>Aim</dd><dt>R</dt><dd>Reload</dd><dt>F (hold)</dt><dd>Buy · rebuild · revive</dd>
+          <dt>V</dt><dd>Knife</dd><dt>G</dt><dd>Grenade</dd><dt>1 · 2 · wheel</dt><dd>Switch weapon</dd><dt>Tab</dt><dd>Scores</dd><dt>Enter</dt><dd>Chat</dd><dt>M</dt><dd>Mute</dd>
+        </dl>
+      </details>
+      <p id="mainError" class="error" role="alert"></p>
+    </section>
+
+    <section id="screenLobby" class="panel" hidden>
+      <div class="lobbyHead">
+        <div><div class="k">Lobby code</div><div id="lobbyCode" class="code">----</div></div>
+        <button id="btnCopy" class="small">Copy invite</button>
+      </div>
+      <ol id="members"></ol>
+      <div id="regionInfo" class="region"></div>
+      <details class="probes"><summary>Server regions</summary><table id="probeTable"></table></details>
+      <div class="actions">
+        <button id="btnStart" class="primary">Start match</button>
+        <button id="btnLeave">Leave</button>
+      </div>
+      <p id="lobbyError" class="error" role="alert"></p>
+    </section>
+
+    <section id="screenOver" class="panel" hidden>
+      <h2 id="overTitle">Game over</h2>
+      <p id="overSub"></p>
+      <table id="overTable"></table>
+      <div class="actions">
+        <button id="btnAgain" class="primary">Play again</button>
+        <button id="btnMenu">Main menu</button>
+      </div>
+    </section>
+
+    <p id="deviceNote" class="note" hidden>This game needs a keyboard and mouse.</p>
+    <footer class="foot">A fan-made homage to classic round-based zombies. All art and sound are generated in code.</footer>
+  </main>
+
+  <div id="pause" hidden>
+    <div class="panel">
+      <h2>Paused</h2>
+      <p class="sub" id="pauseSub">Click to resume.</p>
+      <div class="actions">
+        <button id="btnResume" class="primary">Resume</button>
+        <button id="btnQuit">Quit to menu</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="loading"><div class="spin"></div><div id="loadingText">Loading…</div></div>
+
+  <script type="module" src="/src/client/main.js"></script>
+</body>
+</html>

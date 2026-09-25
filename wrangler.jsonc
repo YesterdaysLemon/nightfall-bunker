@@ -1,0 +1,20 @@
+{
+  // Edge multiplayer: lobbies and matches as Durable Objects, routed on the
+  // game's own hostname so the browser talks to one origin.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nightfall-edge",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-09-01",
+  "routes": [{ "pattern": "zombies.alirezaafshan.com/net/*", "zone_name": "alirezaafshan.com" }],
+  "workers_dev": false,
+  "observability": { "enabled": true, "head_sampling_rate": 0.1 },
+  "durable_objects": {
+    "bindings": [
+      { "name": "PARTY", "class_name": "Party" },
+      { "name": "MATCH", "class_name": "Match" },
+      { "name": "BEACON", "class_name": "Beacon" },
+      { "name": "DIRECTORY", "class_name": "Directory" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Party", "Match", "Beacon", "Directory"] }]
+}

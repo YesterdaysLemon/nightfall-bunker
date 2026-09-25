@@ -1,0 +1,30 @@
+{
+  "name": "nightfall-bunker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Co-op round-based zombie survival FPS in Three.js with edge-placed multiplayer lobbies.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && node scripts/write-build-info.mjs",
+    "start": "node server/index.mjs",
+    "test": "node --test tests/*.test.js",
+    "check": "node scripts/check.mjs",
+    "build:worker": "node scripts/build-worker.mjs",
+    "dev:worker": "wrangler dev",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "ws": "8.21.3"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "playwright": "^1.62.1",
+    "three": "0.186.1",
+    "vite": "8.3.1"
+  }
+}

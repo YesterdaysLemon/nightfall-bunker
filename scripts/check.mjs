@@ -3,7 +3,7 @@ import { readdirSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 
-const roots = ['src', 'server', 'worker', 'scripts', 'tests'];
+const roots = ['src', 'server', 'worker', 'scripts', 'tests', 'art'];
 const files = [];
 const walk = (d) => {
   for (const f of readdirSync(d)) {

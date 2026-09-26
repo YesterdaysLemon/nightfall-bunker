@@ -6,3 +6,4 @@ output/
 *.log
 .DS_Store
 scratch-preview.html
+__pycache__/

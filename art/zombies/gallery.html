@@ -1,0 +1,369 @@
+<title>Zombie Lineup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Special+Elite&family=Stardos+Stencil:wght@400;700&display=swap">
+<style>
+  /* Nightfall Bunker's own palette and type: a single night-time look by design. */
+  :root {
+    color-scheme: dark;
+    --bg: #0b0d10;
+    --wall: #121418;
+    --panel: #16191e;
+    --ink: #ece6d6;
+    --ink-dim: #a39c8b;
+    --ink-faint: #6f6a5f;
+    --blood: #b3130f;
+    --blood-bright: #e2261c;
+    --keep: #8fb56a;
+    --maybe: #d9b44a;
+    --line: rgba(236, 230, 214, 0.16);
+    --line-strong: rgba(236, 230, 214, 0.32);
+    --type: 'Special Elite', 'Courier New', monospace;
+    --stencil: 'Stardos Stencil', Impact, 'Arial Narrow', sans-serif;
+    --step--1: 0.82rem;
+    --step-0: 1rem;
+    --step-1: 1.25rem;
+    --step-2: 1.7rem;
+    --step-3: 2.4rem;
+    --step-4: clamp(2.6rem, 7vw, 4.6rem);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    background-image:
+      radial-gradient(ellipse 80% 50% at 50% -10%, rgba(226, 38, 28, 0.08), transparent 70%),
+      url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.9  0 0 0 0 0.88  0 0 0 0 0.82  0 0 0 0.05 0'/></filter><rect width='160' height='160' filter='url(%23n)'/></svg>");
+    color: var(--ink);
+    font: 400 var(--step-0)/1.55 var(--type);
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding-inline: max(16px, 3vw); padding-block: 0 4rem; }
+  h1, h2, h3 { font-family: var(--stencil); font-weight: 700; text-transform: uppercase; line-height: 0.95; margin: 0; text-wrap: balance; letter-spacing: 0.01em; }
+  a { color: var(--ink); }
+  button, select, textarea { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--blood-bright); outline-offset: 2px; }
+  .label { font-size: var(--step--1); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-dim); }
+
+  /* ---- header */
+  header { display: grid; grid-template-columns: 1fr auto; gap: 1.5rem; align-items: end; padding-block: 3rem 1.6rem; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: var(--step-4); }
+  header h1 span { color: var(--blood-bright); }
+  header p { margin: 0.9rem 0 0; max-width: 60ch; color: var(--ink-dim); }
+  .tally { width: 150px; height: 84px; }
+  @media (max-width: 560px) { header { grid-template-columns: 1fr; } .tally { width: 110px; height: 62px; } }
+
+  /* ---- lineup */
+  .lineup { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; padding-block: 1.6rem; }
+  @media (max-width: 900px) { .lineup { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  @media (max-width: 480px) { .lineup { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .suspect { display: grid; gap: 6px; text-decoration: none; color: inherit; position: relative; }
+  .suspect .shot { position: relative; aspect-ratio: 3 / 4; overflow: hidden; background: var(--panel); border: 1px solid var(--line); }
+  .suspect img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 0.4s ease; }
+  .suspect:hover img { transform: scale(1.04); }
+  .suspect .num { position: absolute; left: 6px; top: 4px; font: 700 var(--step-1) var(--stencil); color: var(--ink); text-shadow: 0 1px 3px rgba(0,0,0,0.9); }
+  .suspect b { font: 700 var(--step-0)/1.1 var(--stencil); text-transform: uppercase; }
+  .suspect small { color: var(--ink-dim); font-size: var(--step--1); font-variant-numeric: tabular-nums; }
+  .badge { position: absolute; right: 6px; top: 6px; font: 700 0.72rem var(--stencil); letter-spacing: 0.08em; text-transform: uppercase; padding: 2px 6px; background: var(--bg); border: 1px solid currentColor; }
+  .badge[data-v="keep"] { color: var(--keep); }
+  .badge[data-v="maybe"] { color: var(--maybe); }
+  .badge[data-v="drop"] { color: var(--ink-faint); }
+
+  /* ---- specimen */
+  .specimen { display: grid; grid-template-columns: minmax(0, 470px) minmax(0, 1fr); gap: clamp(1.2rem, 3vw, 2.6rem); padding-block: 2.6rem; border-top: 1px solid var(--line); scroll-margin-top: 1rem; }
+  @media (max-width: 800px) { .specimen { grid-template-columns: minmax(0, 1fr); } }
+  .viewer { display: grid; gap: 10px; align-content: start; }
+  .stage { position: relative; aspect-ratio: 3 / 4; max-width: 100%; background: var(--panel) center / cover no-repeat; border: 1px solid var(--line-strong); overflow: hidden; touch-action: pan-y; user-select: none; }
+  .stage img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .stage.pixel img, .stage.pixel .spin { image-rendering: pixelated; }
+  .stage .spin { position: absolute; inset: 0; background-repeat: no-repeat; background-size: 600% 400%; cursor: grab; }
+  .stage .spin:active { cursor: grabbing; }
+  .stage .hint { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); font-size: var(--step--1); background: rgba(11, 13, 16, 0.78); padding: 3px 10px; white-space: nowrap; pointer-events: none; }
+  .views { display: flex; flex-wrap: wrap; gap: 6px; }
+  .views button { background: transparent; border: 1px solid var(--line-strong); padding: 5px 10px; cursor: pointer; font-size: var(--step--1); letter-spacing: 0.06em; }
+  .views button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .views button:hover:not([aria-pressed="true"]) { border-color: var(--ink); }
+
+  .info { display: grid; gap: 1.2rem; align-content: start; min-width: 0; }
+  .info h2 { font-size: var(--step-3); }
+  .tagline { margin: 0.35rem 0 0; color: var(--blood-bright); font-size: var(--step-1); }
+  .pitch { margin: 0; max-width: 62ch; }
+  dl.axes { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 1rem; margin: 0; }
+  dl.axes dt { color: var(--ink-dim); font-size: var(--step--1); letter-spacing: 0.1em; text-transform: uppercase; padding-top: 0.2em; }
+  dl.axes dd { margin: 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { font-size: var(--step--1); padding: 2px 9px; border: 1px dashed var(--line-strong); color: var(--ink-faint); }
+  .chip.on { border-style: solid; border-color: var(--ink); color: var(--ink); }
+  .chip.on::before { content: "\2713\00a0"; color: var(--blood-bright); }
+  .stats { display: flex; flex-wrap: wrap; gap: 0.4rem 1.6rem; font-variant-numeric: tabular-nums; }
+  .stats div { display: grid; }
+  .stats b { font: 700 var(--step-1) var(--stencil); }
+  .notes { display: grid; gap: 0.8rem; }
+  .notes p { margin: 0; max-width: 64ch; }
+  .notes p strong { font-family: var(--stencil); text-transform: uppercase; letter-spacing: 0.04em; margin-right: 0.4em; }
+  .concept { display: grid; grid-template-columns: 180px 1fr; gap: 12px; align-items: center; background: none; border: 0; padding: 0; text-align: left; cursor: zoom-in; }
+  .concept img { width: 180px; aspect-ratio: 16 / 9; object-fit: cover; border: 1px solid var(--line-strong); display: block; }
+  .concept span { color: var(--ink-dim); font-size: var(--step--1); }
+  @media (max-width: 420px) { .concept { grid-template-columns: 1fr; } .concept img { width: 100%; } }
+
+  /* ---- verdict */
+  .verdict { border: 1px solid var(--line-strong); padding: 0.9rem; display: grid; gap: 0.7rem; background: rgba(22, 25, 30, 0.7); }
+  .verdict legend { padding: 0 0.4rem; font: 700 var(--step-0) var(--stencil); text-transform: uppercase; letter-spacing: 0.05em; }
+  .seg { display: flex; flex-wrap: wrap; gap: 6px; }
+  .seg label { position: relative; }
+  .seg input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+  .seg span { display: inline-block; padding: 6px 14px; border: 1px solid var(--line-strong); font: 700 var(--step--1) var(--stencil); letter-spacing: 0.1em; text-transform: uppercase; }
+  .seg input:checked + span[data-v="keep"] { background: var(--keep); border-color: var(--keep); color: var(--bg); }
+  .seg input:checked + span[data-v="maybe"] { background: var(--maybe); border-color: var(--maybe); color: var(--bg); }
+  .seg input:checked + span[data-v="drop"] { background: var(--ink-faint); border-color: var(--ink-faint); color: var(--bg); }
+  .seg input:focus-visible + span { outline: 2px solid var(--blood-bright); outline-offset: 2px; }
+  textarea { width: 100%; min-height: 4.6rem; resize: vertical; background: var(--bg); border: 1px solid var(--line-strong); padding: 0.55rem 0.7rem; line-height: 1.45; }
+  textarea::placeholder { color: var(--ink-faint); }
+  .status { font-size: var(--step--1); color: var(--ink-dim); min-height: 1.2em; }
+
+  /* ---- mixer */
+  .mixer { border-top: 1px solid var(--line); padding-block: 2.6rem 1rem; display: grid; gap: 1.3rem; }
+  .mixer h2 { font-size: var(--step-3); }
+  .mixer h2 span { color: var(--blood-bright); }
+  .mixer > p { margin: 0; max-width: 62ch; color: var(--ink-dim); }
+  .mixrow { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  @media (max-width: 700px) { .mixrow { grid-template-columns: minmax(0, 1fr); } }
+  .mixrow label { display: grid; gap: 5px; }
+  select { background: var(--bg); border: 1px solid var(--line-strong); padding: 0.5rem; width: 100%; }
+  footer { border-top: 1px solid var(--line); padding-block: 1.6rem; color: var(--ink-dim); font-size: var(--step--1); display: grid; gap: 0.5rem; }
+  footer p { margin: 0; max-width: 80ch; }
+
+  dialog { padding: 0; border: 1px solid var(--line-strong); background: var(--bg); color: var(--ink); max-width: min(1600px, 96vw); }
+  dialog::backdrop { background: rgba(0, 0, 0, 0.82); }
+  dialog img { display: block; max-width: 100%; max-height: 82vh; }
+  dialog .bar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 0.5rem 0.8rem; }
+  dialog button { background: transparent; border: 1px solid var(--line-strong); padding: 4px 12px; cursor: pointer; }
+  @media (prefers-reduced-motion: reduce) { .suspect img { transition: none; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Zombie <span>Lineup</span></h1>
+      <p id="intro">Six directions for Nightfall Bunker's undead, each modelled in Blender from code and staged in its own light. Spin them, hold them against their concept sheets, and mark what to keep. Your picks and notes save to this page for the next round of design.</p>
+    </div>
+    <svg class="tally" viewBox="0 0 150 84" role="img" aria-label="Six chalk tally marks">
+      <defs><filter id="chalk" x="-10%" y="-10%" width="120%" height="120%"><feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="2" seed="3"/><feDisplacementMap in="SourceGraphic" scale="3.2"/></filter></defs>
+      <g filter="url(#chalk)" stroke-linecap="round" fill="none" stroke-width="6">
+        <g stroke="#c8231b"><path d="M16 12 L14 72"/><path d="M34 11 L33 73"/><path d="M52 12 L53 72"/><path d="M70 11 L72 73"/><path d="M118 13 L116 72"/></g>
+        <path d="M6 62 L82 22" stroke="#ece6d6" stroke-width="5.5"/>
+      </g>
+    </svg>
+  </header>
+
+  <nav class="lineup" id="lineup" aria-label="All six styles"></nav>
+  <main id="specimens"></main>
+
+  <section class="mixer" aria-labelledby="mixTitle">
+    <h2 id="mixTitle">Build <span>your</span> zombie</h2>
+    <p>Styles are made of separable choices. Pick where each one should come from, and anything the lineup is missing.</p>
+    <div class="mixrow">
+      <label for="mixShape"><span class="label">Shape and proportion</span><select id="mixShape"></select></label>
+      <label for="mixSurface"><span class="label">Surface and materials</span><select id="mixSurface"></select></label>
+      <label for="mixRender"><span class="label">Light and rendering</span><select id="mixRender"></select></label>
+    </div>
+    <label for="mixNote" class="label">Anything else</label>
+    <textarea id="mixNote" placeholder="e.g. the plush proportions, but lit like the gritty one, and chalk-outlined like the woodcut"></textarea>
+    <div class="status" id="mixStatus" aria-live="polite"></div>
+  </section>
+
+  <footer>
+    <p id="how">Every model is a Python script for headless Blender 5.2 in <code>art/zombies/</code>. They use skin-modifier bodies posed from a skeleton, sculpting by code, and baked cloth and soft-body simulations. Concept sheets were drawn with Codex image generation, then modelled by hand-written code.</p>
+    <p>Numbers are as modelled: the height is from the model's bounds, and the render time is one 900×1200 hero frame on an RTX 4060.</p>
+  </footer>
+</div>
+
+<dialog id="lightbox" aria-labelledby="lbTitle">
+  <div class="bar"><span id="lbTitle" class="label"></span><button type="button" id="lbClose">Close</button></div>
+  <img id="lbImg" alt="">
+</dialog>
+
+<script type="application/json" id="data">/*__DATA__*/null</script>
+<script>
+(() => {
+  const DATA = JSON.parse(document.getElementById('data').textContent) || [];
+  const $ = (id) => document.getElementById(id);
+  const el = (tag, props = {}, ...kids) => {
+    const n = document.createElement(tag);
+    for (const [k, v] of Object.entries(props)) {
+      if (k === 'class') n.className = v;
+      else if (k === 'text') n.textContent = v;
+      else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
+      else if (v !== undefined && v !== null && v !== false) n.setAttribute(k, v === true ? '' : v);
+    }
+    for (const k of kids.flat()) if (k != null) n.append(k.nodeType ? k : document.createTextNode(k));
+    return n;
+  };
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const fmt = (n) => (n == null ? '–' : Number(n).toLocaleString('en-US'));
+  const VIEWS = [['three_quarter', '3/4'], ['front', 'Front'], ['side', 'Side'], ['back', 'Back'], ['spin', 'Spin 360°']];
+  const TECH = [['skin', 'Skin modifier'], ['sculpt', 'Sculpted by code'], ['cloth', 'Cloth sim'], ['softbody', 'Soft body'], ['other', null]];
+  const state = { picks: {}, mix: {} };
+  const badges = {};
+
+  // ---- lineup
+  DATA.forEach((s, i) => {
+    const badge = el('span', { class: 'badge', hidden: true });
+    badges[s.id] = badge;
+    $('lineup').append(el('a', { class: 'suspect', href: '#' + s.id },
+      el('div', { class: 'shot' + (s.pixel ? ' pixel' : '') },
+        el('img', { src: s.img.three_quarter, alt: s.name + ', three-quarter view', width: 450, height: 600 }),
+        el('span', { class: 'num', text: String(i + 1) }), badge),
+      el('b', { text: s.name }),
+      el('small', { text: `${s.tagline} · ${s.meta.height_m ? s.meta.height_m.toFixed(2) + ' m' : ''}` })));
+  });
+
+  // ---- specimens
+  DATA.forEach((s, i) => {
+    const stage = el('div', { class: 'stage' + (s.pixel ? ' pixel' : ''), role: 'img', 'aria-label': `${s.name} render` });
+    const img = el('img', { src: s.img.three_quarter, alt: `${s.name}, three-quarter view`, loading: i < 2 ? 'eager' : 'lazy', width: 900, height: 1200 });
+    const spin = el('div', { class: 'spin', hidden: true, tabindex: '0', role: 'slider', 'aria-label': `Rotate ${s.name}`,
+      'aria-valuemin': '0', 'aria-valuemax': '23', 'aria-valuenow': '2' });
+    const hint = el('span', { class: 'hint', hidden: true, text: 'Drag or use arrow keys to turn' });
+    stage.append(img, spin, hint);
+    const buttons = VIEWS.map(([v, label]) => el('button', { type: 'button', 'aria-pressed': v === 'three_quarter' ? 'true' : 'false', text: label,
+      onclick: () => show(v) }));
+    let frame = 2, auto = null, drag = null;
+    const setFrame = (f) => {
+      frame = ((Math.round(f) % 24) + 24) % 24;
+      spin.style.backgroundPosition = `${(frame % 6) * 20}% ${Math.floor(frame / 6) * (100 / 3)}%`;
+      spin.setAttribute('aria-valuenow', String(frame));
+    };
+    const stopAuto = () => { if (auto) { clearInterval(auto); auto = null; } };
+    function show(v) {
+      buttons.forEach((b, k) => b.setAttribute('aria-pressed', String(VIEWS[k][0] === v)));
+      stopAuto();
+      if (v === 'spin') {
+        if (!spin.style.backgroundImage) spin.style.backgroundImage = `url("${s.img.spin}")`;
+        setFrame(frame);
+        spin.hidden = false; hint.hidden = false; img.hidden = true;
+        if (!reduced) auto = setInterval(() => setFrame(frame - 1), 140);
+      } else {
+        spin.hidden = true; hint.hidden = true; img.hidden = false;
+        img.src = s.img[v];
+        img.alt = `${s.name}, ${v.replace('_', '-')} view`;
+      }
+    }
+    spin.addEventListener('pointerdown', (e) => { stopAuto(); hint.hidden = true; drag = { x: e.clientX, f: frame }; spin.setPointerCapture(e.pointerId); });
+    spin.addEventListener('pointermove', (e) => { if (drag) setFrame(drag.f - (e.clientX - drag.x) / 18); });
+    const end = () => { drag = null; };
+    spin.addEventListener('pointerup', end);
+    spin.addEventListener('pointercancel', end);
+    spin.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); stopAuto(); setFrame(frame + (e.key === 'ArrowLeft' ? 1 : -1)); }
+    });
+
+    const tech = TECH.filter(([k]) => k !== 'other').map(([k, label]) => el('span', { class: 'chip' + (s.tech?.[k] ? ' on' : ''), title: s.tech?.[k] || 'Not used for this style', text: label }));
+    for (const extra of s.tech?.other || []) tech.push(el('span', { class: 'chip on', text: extra }));
+
+    const verdictName = 'v-' + s.id;
+    const seg = el('div', { class: 'seg', role: 'radiogroup', 'aria-label': `Verdict on ${s.name}` },
+      ['keep', 'maybe', 'drop'].map((v) => el('label', {},
+        el('input', { type: 'radio', name: verdictName, value: v, id: `${verdictName}-${v}`, onchange: () => savePick(s.id) }),
+        el('span', { 'data-v': v, text: v === 'keep' ? 'Keep' : v === 'maybe' ? 'Maybe' : 'Drop' }))));
+    const note = el('textarea', { id: 'note-' + s.id, placeholder: 'What works, what doesn’t, what to steal from it…', oninput: () => savePick(s.id, true) });
+    const status = el('div', { class: 'status', id: 'status-' + s.id, 'aria-live': 'polite' });
+
+    $('specimens').append(el('section', { class: 'specimen', id: s.id, 'aria-labelledby': 'h-' + s.id },
+      el('div', { class: 'viewer' }, stage, el('div', { class: 'views', role: 'group', 'aria-label': 'View' }, buttons)),
+      el('div', { class: 'info' },
+        el('div', {}, el('span', { class: 'label', text: `No. ${i + 1}${s.bonus ? ' · bonus' : ''}` }), el('h2', { id: 'h-' + s.id, text: s.name }), el('p', { class: 'tagline', text: s.tagline })),
+        s.pitch ? el('p', { class: 'pitch', text: s.pitch }) : null,
+        el('dl', { class: 'axes' },
+          el('dt', { text: 'Shape' }), el('dd', { text: s.axes?.shape || '' }),
+          el('dt', { text: 'Surface' }), el('dd', { text: s.axes?.surface || '' }),
+          el('dt', { text: 'Render' }), el('dd', { text: s.axes?.render || '' })),
+        el('div', { class: 'chips', 'aria-label': 'Techniques' }, tech),
+        el('div', { class: 'stats' },
+          el('div', {}, el('span', { class: 'label', text: 'Triangles' }), el('b', { text: fmt(s.meta.tris) })),
+          el('div', {}, el('span', { class: 'label', text: 'Height' }), el('b', { text: s.meta.height_m ? s.meta.height_m.toFixed(2) + ' m' : '–' })),
+          el('div', {}, el('span', { class: 'label', text: 'Renderer' }), el('b', { text: s.meta.engine === 'CYCLES' ? 'Cycles' : 'Eevee' })),
+          el('div', {}, el('span', { class: 'label', text: 'Hero frame' }), el('b', { text: s.meta.render_s != null ? s.meta.render_s + ' s' : '–' }))),
+        el('div', { class: 'notes' },
+          s.strong ? el('p', {}, el('strong', { text: 'Works' }), s.strong) : null,
+          s.weak ? el('p', {}, el('strong', { text: 'Needs' }), s.weak) : null,
+          s.game ? el('p', {}, el('strong', { text: 'In game' }), s.game) : null),
+        s.img.concept ? el('button', { type: 'button', class: 'concept', onclick: () => openLightbox(s) },
+          el('img', { src: s.img.concept, alt: '', loading: 'lazy', width: 180, height: 101 }),
+          el('span', { text: 'Concept sheet, drawn before modelling. Open it full size.' })) : null,
+        el('fieldset', { class: 'verdict' }, el('legend', { text: 'Your call' }), seg, note, status))));
+  });
+
+  // ---- mixer
+  for (const id of ['mixShape', 'mixSurface', 'mixRender']) {
+    $(id).append(el('option', { value: '', text: 'No preference' }), ...DATA.map((s) => el('option', { value: s.id, text: s.name })));
+    $(id).addEventListener('change', () => saveMix());
+  }
+  $('mixNote').addEventListener('input', () => saveMix(true));
+
+  // ---- lightbox
+  const lb = $('lightbox');
+  function openLightbox(s) {
+    $('lbImg').src = s.img.concept; $('lbImg').alt = `Concept sheet for ${s.name}`;
+    $('lbTitle').textContent = `${s.name} · concept sheet`;
+    lb.showModal();
+  }
+  $('lbClose').addEventListener('click', () => lb.close());
+  lb.addEventListener('click', (e) => { if (e.target === lb) lb.close(); });
+
+  // ---- saving: artifact db when this view has it, otherwise a local draft
+  let db = null;
+  const LOCAL = 'nb-lineup-draft';
+  const local = { read() { try { return JSON.parse(localStorage.getItem(LOCAL) || '{}'); } catch { return {}; } },
+    write(v) { try { localStorage.setItem(LOCAL, JSON.stringify(v)); } catch { /* storage blocked */ } } };
+  const timers = {};
+  const setStatus = (id, t) => { const n = $(id); if (n) n.textContent = t; };
+  const readPick = (id) => ({ verdict: (document.querySelector(`input[name="v-${id}"]:checked`) || {}).value || '', note: $('note-' + id).value });
+  const readMix = () => ({ shape: $('mixShape').value, surface: $('mixSurface').value, render: $('mixRender').value, note: $('mixNote').value });
+  function paintBadge(id, v) { const b = badges[id]; if (!b) return; b.hidden = !v; b.dataset.v = v || ''; b.textContent = v; }
+
+  function persist(key, path, value, statusId, debounce) {
+    clearTimeout(timers[key]);
+    setStatus(statusId, db ? 'Saving…' : '');
+    timers[key] = setTimeout(async () => {
+      const draft = local.read(); draft[key] = value; local.write(draft);
+      if (!db) { setStatus(statusId, 'Kept in this browser only. Open the page in Claude to save it for the design team.'); return; }
+      try {
+        await db.doc(path).set({ ...value, updatedAt: new Date().toISOString() });
+        setStatus(statusId, 'Saved');
+      } catch (e) {
+        setStatus(statusId, e && e.code === 'not_granted' ? 'This view can’t save notes. Your draft stays in this browser.' : 'Couldn’t save just now. Your draft is kept in this browser.');
+      }
+    }, debounce ? 700 : 0);
+  }
+  function savePick(id, typing) { const v = readPick(id); paintBadge(id, v.verdict); persist('pick:' + id, 'picks/' + id, v, 'status-' + id, typing); }
+  function saveMix(typing) { persist('mix', 'mix/current', readMix(), 'mixStatus', typing); }
+
+  function fillPick(id, v) {
+    if (!v) return;
+    if (v.verdict) { const r = document.getElementById(`v-${id}-${v.verdict}`); if (r) r.checked = true; paintBadge(id, v.verdict); }
+    if (typeof v.note === 'string' && document.activeElement !== $('note-' + id)) $('note-' + id).value = v.note;
+  }
+  function fillMix(v) {
+    if (!v) return;
+    for (const [k, id] of [['shape', 'mixShape'], ['surface', 'mixSurface'], ['render', 'mixRender']]) if (v[k] != null) $(id).value = v[k];
+    if (typeof v.note === 'string' && document.activeElement !== $('mixNote')) $('mixNote').value = v.note;
+  }
+
+  // Local draft first so the page is filled at once, then the shared record wins.
+  const draft = local.read();
+  DATA.forEach((s) => fillPick(s.id, draft['pick:' + s.id]));
+  fillMix(draft.mix);
+
+  (async () => {
+    try { db = window.claude && (await window.claude.use('db')); } catch { db = null; }
+    if (!db) return;
+    try {
+      const snap = await db.collection('picks').get();
+      snap.docs.forEach((d) => { if (d.exists) fillPick(d.id, d.data()); });
+      const mix = await db.doc('mix/current').get();
+      if (mix.exists) fillMix(mix.data());
+    } catch { /* keep the local draft */ }
+  })();
+})();
+</script>

@@ -1,0 +1,106 @@
+{
+  "ink": {
+    "pitch": "A 2.3 m ghoul rendered as a woodcut print. Light turns into carved lines that follow the form and thicken until the shadow goes solid black. The only colour in it is the red of the eyes and the mouth, printed slightly off-register.",
+    "axes": {
+      "shape": "Nine heads tall and skeletal; long claws; a coat in streaming tatters",
+      "surface": "No materials in the usual sense: cream paper, black ink, one red",
+      "render": "Light-driven hatching, inked outlines, paper grain and ragged print edges"
+    },
+    "tech": {
+      "skin": "The elongated body and bony five-finger claw hands",
+      "sculpt": "Skull face, gaping jaw, ribs, sunken belly, elbows, trouser creases",
+      "cloth": "Coat, sleeves and shoulder cape pre-cut into strips, draped under gusting gravity",
+      "softbody": "Rag tails hanging from the wrists",
+      "other": ["Hatching shader", "Print post-pass (grain, misregistration)"]
+    },
+    "strong": "The side and back silhouettes, with the tatters streaming back, and a print look that holds from every angle. The most graphic, poster-ready direction.",
+    "weak": "The face is small and the teeth barely read. The stance is more upright than the concept's hunch, and the coat front is mostly black.",
+    "game": "It would be spectacular in the dark bunker, where muzzle flashes carve lines into a black figure with red eyes. Use a hatching ShaderMaterial and an outline pass, about 15k triangles, with the tatters as skinned alpha cards."
+  },
+  "porcelain": {
+    "pitch": "A 1940s lady cast as an antique porcelain figurine, broken and mended with gold. The body is a real 6.5 mm ceramic shell, and the breaks expose unglazed bisque. The blue roses follow the folds, because the skirt's print was mapped before the cloth was draped.",
+    "axes": {
+      "shape": "Elegant, realistic proportions; a shambling reach; victory-roll hair",
+      "surface": "Glossy white glaze, cobalt rose print, gold kintsugi seams, bisque at the breaks",
+      "render": "Museum display: velvet drape, black lacquer plinth, crisp spotlights (Cycles)"
+    },
+    "tech": {
+      "skin": "Body and limb skeleton, fused with the sculpted head and hair by voxel remesh",
+      "sculpt": "Skull face, collarbones, neck tendons, knees, elbows and hand tendons",
+      "cloth": "Skirt draped over the body with a broken hem, then fired rigid",
+      "softbody": "A torn sleeve flap sagged under gravity",
+      "other": ["Boolean breaks and a hollowed shell", "Numpy-painted rose tile", "Three-scale crack network"]
+    },
+    "strong": "Nothing else in the lineup looks like it. The gold seams, the draped print, the hollow skull break and the gilded shoes make it eerie and precious at once.",
+    "weak": "The face reads as a cartoon skull rather than gaunt and feminine, the hair is a cap from the back, and the arms feel like a mannequin's.",
+    "game": "Decimate to 8–15k triangles and bake the print, seams and bisque into one texture for a clearcoat material. Damage can widen the glowing seams and knock shell pieces off to show bisque, so health reads as cracks."
+  },
+  "plush": {
+    "pitch": "A 40 cm handmade plush toy that happens to be undead. Every panel was puffed up by a cloth-pressure simulation, with the seams pinned so the felt puckers where it's stitched. The stitches are real geometry, and a million felt fibres give it fuzz.",
+    "axes": {
+      "shape": "Chibi, about 2 heads tall; pillowy panels; stubby mitten arms",
+      "surface": "Mint felt and lavender wool, cross-stitched seams, a glossy button eye",
+      "render": "Soft studio light, peach sweep, shallow toy-photo depth of field (Cycles)"
+    },
+    "tech": {
+      "skin": "Arms and legs, voxel-remeshed before inflating",
+      "sculpt": "Seam grooves, cheeks, the button dimple, mouth, cuff rolls, cupped ears",
+      "cloth": "Pressure inflation of the head, body, limbs, feet and ears, with seams pinned so panels bulge",
+      "other": ["Tube stitches placed on the surface", "Hair-curve felt fibres", "Boolean button holes"]
+    },
+    "strong": "The felt, the stitched head seam, the button eye and the whip-stitched patches all read as a real toy. Shareable-cute, even from the back with its little tag.",
+    "weak": "The stuffing reads as one pompom rather than a burst, a fold at the right hip hides the patch, and the hands need clearer fingers.",
+    "game": "About 3–5k triangles as rigid puppet parts, which suits a plush. Bake the stitches and patches into albedo and normal maps, and fake the fuzz with a sheen rim and a short shell pass."
+  },
+  "rot": {
+    "pitch": "A grounded creature-film take: a starved airfield mechanic, dead for months, sculpted from a skin-modifier body and lit by one bare bulb. It's the only direction that tries to scare you with realism.",
+    "axes": {
+      "shape": "Realistic, gaunt and stooped; one bare foot dragging",
+      "surface": "Subsurface skin with mottling and veins; filthy wool, shearling and denim",
+      "render": "Path-traced (Cycles), a single hard warm bulb, haze, AgX contrast"
+    },
+    "tech": {
+      "skin": "Body, five-finger hands and bare foot, voxel-remeshed into one surface",
+      "sculpt": "Cheeks, temples, clavicles, ribs, tendons, knuckles, wrinkles and the gash, all as code brushes",
+      "cloth": "Jacket draped over a low-res body collider, then torn and thickened",
+      "softbody": "Torn canvas flaps hanging from a trouser cuff",
+      "other": ["Hair curves", "Particle fleece collar", "Boolean eye sockets and mouth"]
+    },
+    "strong": "The stooped, lurching silhouette and the dragged bare foot, especially from the side. The one-boot detail sells the story.",
+    "weak": "The least finished of the six after two rounds. Code-only realism is the hardest bar: the sleeves read as padded tubes, the trousers came out pale, and the face sits between mask and corpse. Reaching the concept would take hand sculpting or a scanned base mesh.",
+    "game": "It would need a retopology to 15–25k triangles, with the sculpt baked to normal and AO maps, and a skinned rig. Hair and fleece would become alpha cards. This is the most production work of any direction."
+  },
+  "toon": {
+    "pitch": "A Saturday-morning cartoon zombie: noodle limbs with no hard elbows, hands and feet built for flopping, and a face that does all the acting. Flat colour, one hard shadow tone and ink outlines, including on every torn edge.",
+    "axes": {
+      "shape": "Rubber-hose noodles, giant hands and feet, lean-forward shamble",
+      "surface": "Flat saturated fills with painted spots, patches and fold lines",
+      "render": "Cel shading with one shadow step, black ink outlines, flat cream backdrop"
+    },
+    "tech": {
+      "skin": "Torso, neck, arms and legs as noodle tubes along smooth curves",
+      "sculpt": "Domed skull, cheekbones, tired brow and a jutting lip, with the mouth cut by boolean",
+      "cloth": "Shirt draped with the top pinned, jagged hem, torn holes cut afterwards",
+      "softbody": "Ear flaps droop under gravity",
+      "other": ["Boolean mouth", "Inverted-hull outlines"]
+    },
+    "strong": "The face reads from across a room: googly eye, droopy lid, one tooth, tongue. The side-view reach is a great silhouette.",
+    "weak": "The shirt is boxy at the shoulders, the hips are stiff for a shamble, and the ears are pointier than the concept's.",
+    "game": "The render mesh is heavy, but a 15–25k triangle rebuild would hold the look. Use MeshToonMaterial with a two-step gradient, a back-face outline shell, and the spots and eye bags baked into a small texture."
+  },
+  "ps1": {
+    "pixel": true,
+    "pitch": "A late-90s console zombie: 13 rigid, flat-shaded segments and one 256-pixel texture page doing all the talking. The pipeline fakes the hardware too, with snapped vertices, fog, no anti-aliasing and a 4×4 dither.",
+    "axes": {
+      "shape": "Stiff, blocky segments; arms locked forward; realistic proportions",
+      "surface": "Hand-placed pixels at 15-bit colour, nearest filtering, painted-on blood",
+      "render": "No anti-aliasing, murky green distance fog, dithered down to 400 lines"
+    },
+    "tech": {
+      "other": ["Rigid bmesh segments", "Numpy-painted texture page", "Vertex snap + dither"]
+    },
+    "strong": "The pixel face reads instantly at game distance. The cap, suspenders and bloused cuffs read too, and the fog sells the era.",
+    "weak": "The hands are simple paddles and the legs run a little long. Blender can't show the era's wobbly texture warping, which a Three.js shader could.",
+    "game": "Cheapest by far at 754 triangles. The segments already pivot at their joints, so they drop onto the current 13-part instanced rig with one NearestFilter texture. Vertex snap, fog and dither are each a few lines of shader."
+  }
+}

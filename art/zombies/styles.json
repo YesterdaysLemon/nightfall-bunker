@@ -1,0 +1,38 @@
+[
+  {
+    "id": "plush",
+    "name": "Stitchling",
+    "tagline": "Chibi plush toy",
+    "prompt": "A chibi zombie made as a handmade plush toy, about two heads tall: a huge round head on a tiny pillowy body, stubby arms reaching forward. Soft pastel mint felt skin and lavender minky fabric overalls, visible stitched seams everywhere, mismatched eyes (one shiny black button, one X-stitch), a little felt mouth with two square felt teeth, a patch sewn on the cheek, a small tear on the belly with white stuffing poking out. Adorable, not scary. Soft studio lighting, pale peach backdrop, gentle fuzzy fabric texture, tilt-shift toy photography."
+  },
+  {
+    "id": "toon",
+    "name": "Noodle",
+    "tagline": "Rubber-hose cartoon",
+    "prompt": "A goofy cartoon zombie in bold Saturday-morning TV animation style: noodly rubber-hose limbs, giant four-fingered gloveless hands, huge feet, a big overbite with one tooth, one bulging eye and one droopy eye, lime-green skin, a ripped tangerine shirt and saggy blue trousers held by one suspender. Mid-shamble squash-and-stretch pose, arms flopping forward. Thick black outlines, flat cel shading with a single hard shadow tone, saturated primary palette, clean cream background."
+  },
+  {
+    "id": "rot",
+    "name": "The Rotted",
+    "tagline": "Gritty realism",
+    "prompt": "A realistic creature-design sculpt of a weathered undead 1940s airfield mechanic for a horror game: gaunt and emaciated, grey-green mottled skin with subsurface translucency, sunken clouded eyes, cracked lips over crooked teeth, a torn and filthy wool flight jacket and overalls caked in mud, one boot missing, long bony fingers. Hunched lurching pose. Single hard warm bulb light from above in a dark concrete bunker, dust in the air, cinematic, grounded film creature design, muted palette."
+  },
+  {
+    "id": "ps1",
+    "name": "Polygon Ghoul",
+    "tagline": "32-bit low-poly",
+    "prompt": "A zombie character model as it would appear in a 1997 console survival-horror game: about 400 faceted polygons, chunky blocky limbs, tiny blurry 64x64 pixel textures with nearest-neighbour pixelation, a painted-on face texture with pixel eyes and a pixel blood smear, stiff arms-forward pose, visible colour dithering, vertex-lit, low 320x240 resolution upscaled with crisp pixels, dark green fog background. Authentic retro 32-bit render, not modern."
+  },
+  {
+    "id": "ink",
+    "name": "The Long Dead",
+    "tagline": "Woodcut ink",
+    "prompt": "A tall gaunt zombie, about nine heads tall, with impossibly long arms and fingers, hunched shoulders and a ragged cloak, drawn as a stark black-and-white woodcut or linocut print: heavy solid black shapes, carved parallel hatching, rough gouge marks, cream paper texture. The ONLY colour is blood red in its two glowing eyes and a dripping mouth. Gothic, unsettling, graphic, strong silhouette, full body standing."
+  },
+  {
+    "id": "porcelain",
+    "name": "Kintsugi",
+    "tagline": "Cracked porcelain (bonus)",
+    "prompt": "A zombie made of glazed white porcelain like an antique figurine: glossy white glaze with cobalt-blue hand-painted floral underglaze patterns, broken and repaired with gleaming gold kintsugi seams, a missing chunk of the head showing the hollow ceramic inside, empty dark eye sockets, elegant but eerie shambling pose. Museum display lighting on a dark velvet background, soft reflections, fine art photography."
+  }
+]

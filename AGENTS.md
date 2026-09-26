@@ -74,6 +74,25 @@ Real WWII weapon names are fine; the wonder weapon is the original Arc Pistol.
   join a lobby, start a match and check they see each other (works on prod).
 - `npm run build:worker` — bundles the Worker to `dist-worker/index.js`.
 
+## Art direction (zombie style explorations)
+
+- `art/zombies/` holds code-built Blender 5.2 models of the zombie in six styles:
+  plush, toon, rot, ps1, ink and porcelain. `art/zombies/README.md` covers the
+  pipeline. `kit.py` is the shared toolkit: skin-modifier bodies, sculpting by
+  code, and baked cloth and soft-body sims. Each style is a `z_<id>.py` script.
+- `node art/zombies/blend.mjs z_<id>.py --preview|--final` renders headless
+  (Blender at `C:/Program Files/Blender Foundation/Blender 5.2/blender.exe`).
+  Final runs queue for the GPU. Output lands in the git-ignored
+  `output/art/zombies/<id>/`.
+- `node art/zombies/concepts.mjs [id]` draws concept sheets with the Codex CLI
+  image tool. The user's `creative-media` skill has the Codex and Blender notes.
+- `node art/zombies/build-gallery.mjs [--record]` builds the "Zombie Lineup"
+  gallery page, published as a claude.ai Artifact
+  (https://claude.ai/artifact/QMNp8ZByC5QbjcUuiizqwt). The owner's verdicts and notes
+  live in that artifact's db: `picks/<id>` and `mix/current`. Read them before the
+  next design round.
+  `--record` copies the hero renders into `art/zombies/renders/`.
+
 ## Deployment
 
 - Site: Deploy Manager app `zombies` → `https://zombies.alirezaafshan.com`,

@@ -56,6 +56,7 @@ jobs:
           npm run smoke
           npm run touch-smoke
           npm run ios-smoke
+          npm run hounds-smoke
           npm run audio-check
       - name: Keep smoke screenshots
         if: always()

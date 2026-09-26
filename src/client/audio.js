@@ -120,6 +120,18 @@ const WALTZ_CHORDS = { Dm: [146.83, [293.66, 349.23, 440]], A7: [110, [277.18, 3
 const WALTZ_PROG = ['Dm', 'Dm', 'A7', 'A7', 'Dm', 'Gm', 'A7', 'Dm', 'A7', 'Dm'];
 const BOX_MELODY = [0, 3, 7, 3, 12, 11, 7, 8, 7, 3, 2, -1, 0, 3, 6, 3];
 
+// Hellhound howl pitch contours: [time fraction, pitch multiplier].
+const HOWL = [[0, 0.62], [0.12, 1.0], [0.3, 1.07], [0.6, 1.0], [0.85, 0.88], [1, 0.58]];
+const WHIMPER = [[0, 1.0], [0.2, 1.12], [0.55, 0.9], [1, 0.55]];
+
+// Kintsugi (porcelain doll) motif: descending neighbour-tone lullaby, semitones from A5, 4 bars of 3/4.
+const LULLABY = [12, 11, 12, 7, 8, 7, 3, 5, 3, 0, -1, 0];
+const LULLABY_BASS = [0, -4, -5, -1];            // A, F, E, G# under each bar (harmonic minor)
+const CELESTA = [[1, 1, 1], [2, 0.22, 0.5], [4.16, 0.07, 0.2]];
+const CUP_NOTES = [1760, 2093, 2637];            // A6, C7, E7: each broken cup climbs the triad
+const PORCELAIN = [[2380, 0.14, 0.2], [3915, 0.1, 0.14], [5470, 0.07, 0.1], [7020, 0.05, 0.07]];
+const BOSS_BEAT = 0.46;
+
 export class AudioEngine {
   constructor(opts = {}) {
     const o = opts && typeof opts === 'object' ? opts : {};
@@ -139,6 +151,9 @@ export class AudioEngine {
     this._gT = 0;
     this._amb = null;
     this._zcache = new Map();
+    this._hcache = new Map();
+    this._buckets = {};
+    this._boss = null;
     this._speechVoice = null;
     // Optional (x, y, z) => 0..1 wall occlusion between listener and a source, set by the game.
     this.occlusion = null;
@@ -240,6 +255,7 @@ export class AudioEngine {
       if (now >= a.nextRumble) { this._rumble(now + 0.05); a.nextRumble = now + rand(15, 40); }
       if (now >= a.nextCrow) { if (Math.random() < 0.6) this._crow(now + 0.05); a.nextCrow = now + rand(45, 120); }
     }
+    if (this._boss) this._bossTick(this._boss);
   }
 
   // ---- weapons --------------------------------------------------------------------------------
@@ -1015,6 +1031,441 @@ export class AudioEngine {
     return { stop: () => { try { this._kill(v, 0.25); } catch { /* ignore */ } } };
   }
 
+  // ---- hellhound rounds -----------------------------------------------------------------------
+
+  // Signature cue: thunder rolls in under a dread swell while a pack of hounds howls around you.
+  houndRoundStart() {
+    const v = this._voice(P_CRIT, null, this.music); if (!v) return;
+    const t = this._now(), dur = 4.6, o = v.out;
+    o.gain.value = 0.7;
+    // distant thunder: a clap, then irregular swells with the filter slowly closing
+    this._burst(v, o, t, { kind: 'pink', type: 'lowpass', f: 2200, a: 0.01, d: 0.45, peak: 0.3 });
+    this._tone(v, o, t, { f: 50, f2: 27, sw: 1.4, a: 0.02, d: 1.8, peak: 0.55 });
+    const tg = this._g(v, 0), tl = this._flt(v, 'lowpass', 750, 0.6);
+    glide(tl.frequency, t, 750, 140, dur);
+    tg.gain.setValueAtTime(EPS, t);
+    tg.gain.linearRampToValueAtTime(0.9, t + 0.1);
+    for (let tt = t + 0.1; tt < t + dur - 1.1;) { tt += rand(0.18, 0.55); tg.gain.linearRampToValueAtTime(rand(0.25, 0.8), tt); }
+    tg.gain.exponentialRampToValueAtTime(EPS, t + dur);
+    link(this._noise(v, 'brown', t, dur + 0.1), tl, tg, o);
+    // dread: low minor-second / tritone cluster whose filter swells open and shut
+    const lp = this._flt(v, 'lowpass', 110, 2.2), dg = this._g(v);
+    lp.frequency.setValueAtTime(110, t);
+    lp.frequency.exponentialRampToValueAtTime(760, t + 3);
+    lp.frequency.exponentialRampToValueAtTime(130, t + dur);
+    ahr(dg.gain, t, 2.4, 0.8, 1.35, 0.2);
+    link(lp, dg, o);
+    for (const [f, det] of [[55, -6], [58.27, 5], [77.78, 0], [110, 9]]) {
+      const x = this._osc(v, 'sawtooth', f, t, t + dur + 0.05);
+      x.detune.setValueAtTime(det, t);
+      x.detune.linearRampToValueAtTime(det - 25, t + dur);
+      x.connect(lp);
+    }
+    this._burst(v, o, t + 0.4, { kind: 'pink', type: 'highpass', f: 1800, a: 1.9, d: 0.35, peak: 0.07 });
+    // the pack: three howls, staggered and spread across the stereo field, into a dark echo
+    const echo = this._echo(v, o, 0.31, 0.4, 1500, 0.4);
+    [[0.3, 0, -0.65, 2.3], [0.95, 5, 0.6, 2.1], [1.7, -2, 0.05, 2.5]].forEach(([dt, st, pan, hd]) => {
+      const sp = this._pan(v, pan);
+      sp.connect(o);
+      sp.connect(echo);
+      this._howl(v, sp, t + dt, hd, semi(330, st) * rand(0.98, 1.02), 1);
+    });
+  }
+
+  // Relief: the last howl recedes while a suspended organ chord settles onto D major.
+  houndRoundEnd() {
+    const v = this._voice(P_CRIT, null, this.music); if (!v) return;
+    const t = this._now(), o = v.out;
+    o.gain.value = 0.6;
+    const far = this._pan(v, Math.random() < 0.5 ? -0.6 : 0.6), hl = this._flt(v, 'lowpass', 1300, 0.7);
+    link(hl, far, o);
+    this._howl(v, hl, t, 1.3, 392 * rand(0.97, 1.03), 0.45, WHIMPER);
+    this._burst(v, o, t, { kind: 'brown', type: 'lowpass', f: 300, f2: 110, a: 0.25, d: 1.5, peak: 0.45 });
+    const cl = this._flt(v, 'lowpass', 1700, 0.7), eg = this._g(v);
+    ahr(eg.gain, t + 0.1, 0.35, 0.6, 1.0, 0.13);
+    link(cl, eg, o);
+    for (const [f, g] of [[146.83, 146.83], [196, 185], [220, 220], [293.66, 293.66]]) {
+      for (const det of [-6, 5]) {
+        const x = this._osc(v, 'organ', f, t, t + 2.15);
+        x.detune.value = det;
+        x.frequency.setValueAtTime(f, t + 0.55);
+        x.frequency.exponentialRampToValueAtTime(g, t + 0.75);
+        x.connect(cl);
+      }
+    }
+    this._bell(v, o, t + 0.62, 587.33, 1.4, 0.1, BELL2);
+    this._bell(v, o, t + 0.64, 880 * 1.002, 1.1, 0.06, BELL2);
+  }
+
+  // Where a hound is about to appear: a sharp electric snap and tear, a boom, a rolling tail.
+  lightning(pos) {
+    const P = validPos(pos), v = this._voice(P_HIGH, P); if (!v) return;
+    const t = this._now(), o = v.out;
+    o.gain.value = P ? 0.62 : 0.45;
+    const m = this._g(v, 1);
+    link(m, this._ws(v, this.curves.hard), this._g(v, 0.8), o);
+    this._burst(v, m, t, { type: 'highpass', f: 2500, d: 0.008, peak: 1.2 });
+    this._burst(v, m, t, { f: 1800, q: 0.6, d: 0.05, peak: 0.9 });
+    this._crackle(v, m, t, 0.18, { f: 4500, q: 0.7, count: 28, peak: 0.8, spread: 1.8, len: 0.006, fade: 0.6 });
+    // ring-modulated buzz under the tear
+    const bz = this._osc(v, 'sawtooth', 140, t, t + 0.25), ring = this._g(v, 0), bg = this._g(v);
+    glide(bz.frequency, t, 140, 55, 0.22);
+    this._osc(v, 'square', 1730, t, t + 0.25).connect(ring.gain);
+    env(bg.gain, t, 0.002, 0.2, 0.3);
+    link(bz, ring, this._flt(v, 'highpass', 700, 0.7), bg, o);
+    // boom, then a rolling rumble that wanders down and away
+    this._tone(v, m, t + 0.01, { f: 95, f2: 30, sw: 0.5, d: 0.6, peak: 0.75 });
+    const dur = rand(2.2, 2.8), g = this._g(v, 0), lp = this._flt(v, 'lowpass', 900, 0.6);
+    glide(lp.frequency, t, 900, 140, dur);
+    g.gain.setValueAtTime(EPS, t);
+    g.gain.linearRampToValueAtTime(0.85, t + 0.06);
+    for (let tt = t + 0.06; tt < t + dur - 0.7;) { tt += rand(0.12, 0.45); g.gain.linearRampToValueAtTime(rand(0.25, 0.8) * (1 - (tt - t) / dur), tt); }
+    g.gain.exponentialRampToValueAtTime(EPS, t + dur);
+    link(this._noise(v, 'brown', t, dur + 0.1), lp, g, o);
+  }
+
+  // Low, wet, rumbling growl (1-2 s); pitch, size, flutter and wetness come from the seed.
+  houndGrowl(pos, seed = 0) {
+    if (!this._ok() || !this._take('growl', 4, 3)) return NOOP_TRACK;
+    const h = this._hv(seed), P = validPos(pos), v = this._voice(P_LOW, P); if (!v) return NOOP_TRACK;
+    const t = this._now(), dur = clamp((1.3 + h.len * 0.8) * rand(0.92, 1.08), 1.2, 2.1), f0 = h.f0 * rand(0.95, 1.05);
+    v.out.gain.value = 0.2;
+    const { src, eg } = this._throat(v, t, dur, f0, h, { vA: VOWELS[2], vB: VOWELS[3], scale: 0.75, q: 4, rough: h.rough, depth: 0.85, drive: 'hard' });
+    wobble(src.frequency, t, dur, f0, 0.1, 7, 0.85);
+    ahr(eg.gain, t, 0.1, dur * 0.6, dur * 0.4 - 0.1, 3);
+    this._tone(v, v.out, t, { f: f0, a: 0.15, h: dur * 0.55, d: dur * 0.3, peak: 0.22 });
+    this._burst(v, v.out, t, { kind: 'pink', f: 450, q: 1.2, a: dur * 0.2, h: dur * 0.4, d: dur * 0.4, peak: 0.25 });
+    // saliva: soft, low bubbling clicks
+    this._crackle(v, v.out, t + 0.05, dur * 0.9, { kind: 'pink', f: 700, q: 1.5, count: Math.round(10 + 20 * h.wet), peak: 0.35 * h.wet, len: 0.02, fade: 0.3 });
+    return this._track(v);
+  }
+
+  // Aggressive snarl into a single hard bark (0.3-0.6 s).
+  houndBark(pos, seed = 0) {
+    const h = this._hv(seed), P = validPos(pos), v = this._voice(P_MED, P); if (!v) return NOOP_TRACK;
+    const t = this._now(), sn = 0.1 + 0.12 * h.snarl, bd = rand(0.25, 0.34), tb = t + sn, f = h.bark * rand(0.95, 1.05);
+    v.out.gain.value = 0.27;
+    const s1 = this._throat(v, t, sn + 0.03, h.f0 * 1.6, h, { vA: VOWELS[4], vB: VOWELS[0], scale: 0.95, q: 4, rough: h.rough * 1.4, depth: 0.85, drive: 'fuzz' });
+    ahr(s1.eg.gain, t, 0.02, sn * 0.6, sn * 0.4 + 0.02, 2.2);
+    const s2 = this._throat(v, tb, bd, f, h, { vA: VOWELS[0], vB: VOWELS[2], scale: 1.25, q: 3.5, rough: 70 + h.rough, depth: 0.35, drive: 'fuzz' });
+    const fp = s2.src.frequency;
+    fp.setValueAtTime(f * 0.8, tb);
+    fp.linearRampToValueAtTime(f * 1.15, tb + 0.04);
+    fp.exponentialRampToValueAtTime(f * 0.7, tb + bd);
+    ahr(s2.eg.gain, tb, 0.012, bd * 0.3, bd * 0.7, 3.2);
+    this._tone(v, v.out, tb, { f: 150, f2: 70, d: 0.08, peak: 0.6 });
+    this._burst(v, v.out, tb, { kind: 'pink', type: 'highpass', f: 1800, a: 0.005, d: bd * 0.6, peak: 0.35 });
+    return this._track(v);
+  }
+
+  // Jaws snapping shut, then tearing.
+  houndBite(pos) {
+    const P = validPos(pos), v = this._voice(P_MED, P); if (!v) return;
+    const t = this._now(), o = v.out;
+    o.gain.value = P ? 0.85 : 0.55;
+    const m = this._g(v, 1);
+    link(m, this._ws(v, this.curves.hard), o);
+    this._burst(v, m, t, { f: 3400, q: 1.8, d: 0.012, peak: 1.1 });
+    this._burst(v, m, t, { type: 'highpass', f: 6000, d: 0.006, peak: 0.6 });
+    this._tone(v, m, t, { f: 1150, f2: 520, d: 0.035, peak: 0.35 });
+    this._tone(v, o, t, { f: 170, f2: 80, d: 0.07, peak: 0.6 });
+    this._burst(v, o, t + 0.02, { kind: 'pink', type: 'lowpass', f: 650, d: 0.1, peak: 0.6 });
+    this._crackle(v, o, t + 0.04, 0.28, { kind: 'pink', f: 1600, q: 1.2, count: 26, peak: 0.7, len: 0.018, fade: 0.5, spread: 0.9 });
+    this._burst(v, o, t + 0.04, { kind: 'pink', f: 1400, f2: 500, q: 2, a: 0.03, h: 0.1, d: 0.15, peak: 0.45 });
+  }
+
+  // A yelp cut short as the hound bursts into flame.
+  houndDeath(pos, seed = 0) {
+    const h = this._hv(seed), P = validPos(pos), v = this._voice(P_MED, P); if (!v) return;
+    const t = this._now(), o = v.out, yd = 0.16 + 0.06 * h.snarl, f = h.bark * 1.6;
+    o.gain.value = 0.44;
+    const { src, eg } = this._throat(v, t, yd, f, h, { vA: VOWELS[0], vB: VOWELS[1], scale: 1.35, q: 4, rough: 90, depth: 0.2 });
+    src.frequency.setValueAtTime(f * 0.9, t);
+    src.frequency.linearRampToValueAtTime(f * 1.3, t + 0.05);
+    src.frequency.linearRampToValueAtTime(f * 1.1, t + yd);
+    eg.gain.setValueAtTime(EPS, t);
+    eg.gain.linearRampToValueAtTime(2.6, t + 0.015);
+    eg.gain.setValueAtTime(2.6, t + yd - 0.02);
+    eg.gain.exponentialRampToValueAtTime(EPS, t + yd + 0.01);
+    const tf = t + yd - 0.03, m = this._g(v, 1);
+    link(m, this._ws(v, this.curves.soft), this._g(v, 0.8), o);
+    this._burst(v, m, tf, { kind: 'brown', type: 'lowpass', f: 900, f2: 200, q: 0.8, a: 0.01, d: 0.45, peak: 1.0 });
+    this._tone(v, m, tf, { f: 120, f2: 38, sw: 0.3, d: 0.35, peak: 0.7 });
+    this._burst(v, o, tf, { kind: 'pink', f: 350, f2: 2600, q: 1.1, a: 0.07, d: 0.55, peak: 0.8 });
+    this._burst(v, o, tf + 0.05, { type: 'highpass', f: 3500, a: 0.04, d: 0.4, peak: 0.15 });
+    this._burst(v, o, tf + 0.1, { kind: 'pink', type: 'lowpass', f: 1300, f2: 600, a: 0.08, h: 0.2, d: 0.45, peak: 0.4 });
+    this._crackle(v, o, tf + 0.05, 0.8, { f: 2800, q: 0.9, count: 24, peak: 0.45, spread: 1.4 });
+  }
+
+  // Claw patter while sprinting: cheap (2 sources), rate-limited, skipped beyond 30 m.
+  houndStep(pos) {
+    if (!this._ok()) return;
+    const P = validPos(pos), L = this._L;
+    if (P && Math.hypot(P.x - L.x, P.y - L.y, P.z - L.z) > 30) return;
+    if (!this._take('hstep', 8, 14)) return;
+    const v = this._voice(P_LOW, P); if (!v) return;
+    const t = this._now(), r = rand(0.85, 1.15);
+    v.out.gain.value = P ? 0.55 : 0.25;
+    this._crackle(v, v.out, t, 0.06, { f: 3800 * r, q: 1.6, count: 3 + ((Math.random() * 2) | 0), peak: 0.9, len: 0.004, fade: 0.3 });
+    this._tone(v, v.out, t, { f: 140 * r, f2: 90, d: 0.035, peak: 0.35 });
+  }
+
+  // ---- Kintsugi (porcelain boss) --------------------------------------------------------------
+
+  // One of three teacups: clink, tinkling shards, and a tiny bell that climbs A-C-E by `index`.
+  teacupBreak(pos, index = 0) {
+    const P = validPos(pos), v = this._voice(P_HIGH, P); if (!v) return;
+    const i = clamp(Math.round(fin(index, 0)), 0, 2), k = 1 + 0.07 * i, t = this._now(), o = v.out;
+    o.gain.value = P ? 0.8 : 0.5;
+    this._porcelain(v, o, t, k, 1);
+    this._shards(v, o, t + 0.02, 0.55, 9, k, 0.18);
+    this._crackle(v, o, t + 0.03, 0.5, { f: 6200 * k, q: 6, count: 14, peak: 0.35, spread: 1.7, len: 0.006 });
+    this._tone(v, o, t + 0.01, { f: 230 * k, f2: 140, d: 0.05, peak: 0.25 });
+    this._bell(v, o, t + 0.09, CUP_NOTES[i], 1.4, 0.12, MUSICBOX);
+  }
+
+  // Soft music-box shimmer (~3 s). Starts and ends at a low level so retriggers every ~2.7 s loop.
+  figurineChime(pos) {
+    const P = validPos(pos), v = this._voice(P_MED, P); if (!v) return NOOP_TRACK;
+    const t = this._now(), dur = 3, o = v.out;
+    o.gain.value = P ? 0.8 : 0.45;
+    const mix = this._g(v, 0), trem = this._g(v, 0.75);
+    mix.gain.setValueAtTime(EPS, t);
+    mix.gain.linearRampToValueAtTime(1, t + 0.35);
+    mix.gain.setValueAtTime(1, t + dur - 0.9);
+    mix.gain.linearRampToValueAtTime(EPS, t + dur);
+    link(this._osc(v, 'sine', 6.5, t, t + dur + 0.05), this._g(v, 0.25), trem.gain);
+    link(mix, trem, o);
+    const arp = [0, 3, 7, 14, 12, 7, 3, 10];
+    for (let i = 0, tt = 0.02; tt < dur - 0.5; i++, tt += 0.21) {
+      this._bell(v, mix, t + tt, semi(1760, arp[i % arp.length] - 12 * (i % 2)) * rand(0.998, 1.002), 0.9, 0.1, MUSICBOX);
+    }
+    for (const f of [3520, 4186, 5274]) this._tone(v, mix, t + rand(0, 0.3), { f: f * rand(0.997, 1.003), a: 0.6, h: dur - 1.6, d: 0.9, peak: 0.018 });
+    this._crackle(v, mix, t, dur - 0.3, { f: 8000, q: 1.5, count: 18, peak: 0.08, fade: 0 });
+    return this._track(v);
+  }
+
+  // Waking her: the lullaby detunes and slows like a dying spring, then porcelain cracks.
+  figurineWake(pos) {
+    const P = validPos(pos), v = this._voice(P_HIGH, P); if (!v) return;
+    const t = this._now(), dur = 3.5, o = v.out, span = dur - 0.55;
+    o.gain.value = P ? 0.78 : 0.45;
+    for (let tt = 0, i = 0; tt < span && i < 32; i++) {
+      const prog = tt / span, sag = prog * prog;
+      const cents = rand(-6, 6) * (1 + 4 * sag) - 300 * sag * prog;
+      this._bell(v, o, t + tt, semi(880, LULLABY[i % LULLABY.length] + cents / 100), 1.2 + sag, 0.2 * (1 - 0.35 * prog), MUSICBOX);
+      tt += 0.19 * (1 + 1.6 * sag) * rand(0.96, 1.04);
+    }
+    const bed = this._g(v), lp = this._flt(v, 'lowpass', 600, 0.7);
+    ahr(bed.gain, t, 0.8, dur - 1.8, 0.9, 0.05);
+    link(lp, bed, o);
+    for (const f of [110, 116.54, 164.81]) {
+      const x = this._osc(v, 'triangle', f, t, t + dur);
+      x.detune.setValueAtTime(0, t);
+      x.detune.linearRampToValueAtTime(-120, t + dur);
+      x.connect(lp);
+    }
+    const tc = t + dur - 0.35, m = this._g(v, 1);
+    link(m, this._ws(v, this.curves.hard), this._g(v, 0.5), o);
+    this._porcelain(v, o, tc, 0.9, 0.9);
+    this._burst(v, m, tc, { f: 2200, q: 1, d: 0.05, peak: 0.55 });
+    this._crackle(v, o, tc + 0.01, 0.3, { f: 5000, q: 2, count: 12, peak: 0.4, spread: 1.6, len: 0.005 });
+    this._tone(v, o, tc, { f: 240, f2: 110, d: 0.08, peak: 0.35 });
+  }
+
+  // Boss fight bed on the music bus: celesta lullaby scheduled a bar at a time over a sour drone.
+  // Returns { stop(fade = 1) }; starting it again replaces the previous loop.
+  bossMusic() {
+    if (!this._ok()) return NOOP_HANDLE;
+    if (this._boss) this._boss.handle.stop(0.3);
+    const v = this._voice(P_CRIT, null, this.music); if (!v) return NOOP_HANDLE;
+    const t = this.ctx.currentTime, END = Infinity, o = v.out;
+    v.bg = true;
+    v.end = Infinity;
+    o.gain.setValueAtTime(0, t);
+    o.gain.linearRampToValueAtTime(0.8, t + 2);
+    const dl = this._flt(v, 'lowpass', 260, 0.7), dg = this._g(v, 0.07);
+    link(dl, dg, o);
+    for (const [f, type] of [[55, 'sine'], [55.4, 'triangle'], [77.78, 'sine']]) this._osc(v, type, f, t, END).connect(dl);
+    link(this._osc(v, 'sine', 0.09, t, END), this._g(v, 0.03), dg.gain);
+    const bus = this._g(v, 1);
+    bus.connect(o);
+    const st = { v, bus, next: t + 0.3, bar: 0, subs: [], stopped: false, timer: null, handle: null };
+    st.handle = {
+      stop: (fade = 1) => {
+        if (st.stopped) return;
+        st.stopped = true;
+        if (st.timer != null) clearInterval(st.timer);
+        if (this._boss === st) this._boss = null;
+        if (!this.ctx) return;
+        const f = clamp(fin(fade, 1), 0.02, 8);
+        this._kill(v, f);
+        for (const s of st.subs) this._kill(s, f);
+      },
+    };
+    this._boss = st;
+    if (typeof setInterval === 'function') st.timer = setInterval(() => { try { this._bossTick(st); } catch { /* ignore */ } }, 250);
+    this._bossTick(st);
+    return st.handle;
+  }
+
+  // Porcelain heel on concrete: hard click, short ceramic ring, a little floor.
+  bossStep(pos) {
+    const P = validPos(pos), v = this._voice(P_MED, P); if (!v) return;
+    const t = this._now(), o = v.out, r = rand(0.96, 1.04);
+    o.gain.value = P ? 0.75 : 0.35;
+    this._burst(v, o, t, { type: 'highpass', f: 4500, d: 0.005, peak: 1 });
+    this._burst(v, o, t, { f: 1900 * r, q: 3, d: 0.025, peak: 0.6 });
+    this._tone(v, o, t, { f: 3150 * r, d: 0.045, peak: 0.12 });
+    this._tone(v, o, t, { f: 4870 * r, d: 0.03, peak: 0.07 });
+    this._tone(v, o, t, { f: 210 * r, f2: 120, d: 0.03, peak: 0.3 });
+  }
+
+  // She bursts apart to teleport: a smash, a second of tinkling shards, a draining swirl.
+  bossShatter(pos) {
+    const P = validPos(pos), v = this._voice(P_HIGH, P); if (!v) return;
+    const t = this._now();
+    v.out.gain.value = P ? 0.82 : 0.52;
+    this._smash(v, t, 0.85, 1.15);
+    this._burst(v, v.out, t + 0.05, { kind: 'pink', f: 4000, f2: 500, q: 1.5, a: 0.05, d: 0.6, peak: 0.25 });
+    this._tone(v, v.out, t + 0.05, { f: 1760, f2: 440, sw: 0.5, a: 0.05, d: 0.5, peak: 0.04 });
+  }
+
+  // She reassembles: a reversed shimmer rushing in, landing on a clink (~0.7 s).
+  bossReform(pos) {
+    const P = validPos(pos), v = this._voice(P_HIGH, P); if (!v) return;
+    const t = this._now(), o = v.out, tc = t + 0.62;
+    o.gain.value = P ? 0.8 : 0.5;
+    for (const f of [1760, 2217.46, 2637, 3520, 4434.92, 5274]) this._swell(v, o, t + rand(0, 0.12), tc, f * rand(0.995, 1.005), 0.05);
+    const g = this._g(v), bp = this._flt(v, 'bandpass', 1200, 1.2);
+    g.gain.setValueAtTime(0.4 * 0.03, t);
+    g.gain.exponentialRampToValueAtTime(0.4, tc);
+    g.gain.exponentialRampToValueAtTime(EPS, tc + 0.03);
+    glide(bp.frequency, t, 1200, 6500, 0.62);
+    link(this._noise(v, 'pink', t, 0.72), bp, g, o);
+    this._crackle(v, o, t + 0.1, 0.5, { f: 5500, q: 4, count: 16, peak: 0.25, spread: 0.35, len: 0.006, fade: -0.8 });
+    this._porcelain(v, o, tc, 1.1, 0.9);
+  }
+
+  // Short glassy shriek (inharmonic sines with flutter) plus a swish.
+  bossAttack(pos) {
+    const P = validPos(pos), v = this._voice(P_MED, P); if (!v) return;
+    const t = this._now(), o = v.out, d = 0.44, f = rand(1250, 1400), end = t + d + 0.05;
+    o.gain.value = P ? 0.6 : 0.4;
+    const vib = this._g(v, 40), eg = this._g(v);
+    this._osc(v, 'sine', 14, t, end).connect(vib);
+    ahr(eg.gain, t, 0.03, 0.12, d - 0.15, 0.5);
+    const bend = (p, k) => {
+      p.setValueAtTime(f * k * 0.8, t);
+      p.linearRampToValueAtTime(f * k * 1.18, t + 0.09);
+      p.exponentialRampToValueAtTime(f * k * 0.9, t + d);
+    };
+    for (const [r, a] of [[1, 1], [2.32, 0.45], [3.73, 0.2]]) {
+      const x = this._osc(v, 'sine', f * r, t, end);
+      bend(x.frequency, r);
+      vib.connect(x.detune);
+      link(x, this._g(v, a), eg);
+    }
+    const saw = this._osc(v, 'sawtooth', f / 2, t, end);
+    bend(saw.frequency, 0.5);
+    link(saw, this._flt(v, 'bandpass', 2900, 6), this._g(v, 0.5), eg);
+    eg.connect(o);
+    this._burst(v, o, t + 0.07, { kind: 'pink', f: 500, f2: 3000, q: 1.3, a: 0.09, d: 0.16, peak: 0.8 });
+  }
+
+  // A chunk breaks off: crack, then a singing glass-harmonica wail beating against itself.
+  bossScream(pos) {
+    const P = validPos(pos), v = this._voice(P_HIGH, P); if (!v) return;
+    const t = this._now(), o = v.out, dur = 2.1, tw = t + 0.05, f = rand(640, 720), end = tw + dur + 0.05;
+    o.gain.value = P ? 0.7 : 0.45;
+    this._porcelain(v, o, t, 0.85, 1);
+    this._shards(v, o, t + 0.02, 0.5, 8, 1, 0.14);
+    const bend = (p, k) => {
+      p.setValueAtTime(f * k * 0.85, tw);
+      p.linearRampToValueAtTime(f * k * 1.12, tw + 0.35);
+      p.linearRampToValueAtTime(f * k * 1.05, tw + dur * 0.6);
+      p.exponentialRampToValueAtTime(f * k * 0.72, tw + dur);
+    };
+    const vib = this._g(v, 0), eg = this._g(v);
+    vib.gain.setValueAtTime(0, tw);
+    vib.gain.linearRampToValueAtTime(22, tw + dur * 0.6);
+    this._osc(v, 'sine', 5.2, tw, end).connect(vib);
+    ahr(eg.gain, tw, 0.25, dur * 0.4, dur * 0.47, 0.22);
+    for (const [k, a] of [[1, 1], [1.059, 0.7], [2.003, 0.3], [3, 0.08]]) {
+      const x = this._osc(v, 'sine', f * k, tw, end);
+      bend(x.frequency, k);
+      vib.connect(x.detune);
+      link(x, this._g(v, a), eg);
+    }
+    eg.connect(o);
+    // breathy soprano vowel under the glass
+    const sing = this._osc(v, 'sawtooth', f, tw, end), sg = this._g(v);
+    bend(sing.frequency, 1);
+    vib.connect(sing.detune);
+    ahr(sg.gain, tw, 0.3, dur * 0.35, dur * 0.5, 0.9);
+    VOWELS[0].forEach((fa, i) => {
+      const bp = this._flt(v, 'bandpass', fa * 1.35, 8);
+      glide(bp.frequency, tw, fa * 1.35, VOWELS[1][i] * 1.35, dur);
+      link(sing, bp, sg);
+    });
+    sg.connect(o);
+    this._burst(v, o, tw, { kind: 'pink', type: 'highpass', f: 3000, a: 0.3, h: 0.6, d: 0.8, peak: 0.06 });
+  }
+
+  // Final shatter at her position, plus a golden, slightly eerie choir swell everyone hears.
+  bossDeath(pos) {
+    const P = validPos(pos), t = this._now(), v = this._voice(P_HIGH, P);
+    if (v) {
+      v.out.gain.value = P ? 0.66 : 0.42;
+      this._smash(v, t, 1.0, 1.6);
+      this._smash(v, t + 0.22, 0.6, 0.8);
+      this._tone(v, v.out, t, { f: 70, f2: 30, sw: 0.6, d: 0.8, peak: 0.6 });
+    }
+    const c = this._voice(P_CRIT, null, this.music); if (!c) return;
+    const tc = t + 0.15, dur = 3.6;
+    c.out.gain.value = 0.8;
+    const bus = this._g(c, 0.3), eg = this._g(c);
+    ahr(eg.gain, tc, 0.9, 1.3, 1.4, 2.2);
+    for (const [f1, f2, q] of [[800, 520, 6], [1150, 880, 7], [2800, 2500, 8]]) {
+      const bp = this._flt(c, 'bandpass', f1, q);
+      glide(bp.frequency, tc, f1, f2, dur);
+      link(bus, bp, eg);
+    }
+    eg.connect(c.out);
+    const vd = this._g(c, 8);
+    this._osc(c, 'sine', 5.1, tc, tc + dur + 0.1).connect(vd);
+    // A major with a sharp-4 that leans into the fifth
+    for (const [f, g] of [[220, 220], [277.18, 277.18], [329.63, 329.63], [440, 440], [622.25, 659.25]]) {
+      for (const det of [-7, 6]) {
+        const o = this._osc(c, 'sawtooth', f, tc, tc + dur + 0.1);
+        o.detune.value = det;
+        o.frequency.setValueAtTime(f, tc + 1.3);
+        o.frequency.exponentialRampToValueAtTime(g, tc + 1.8);
+        vd.connect(o.detune);
+        o.connect(bus);
+      }
+    }
+    this._tone(c, c.out, tc, { wave: 'organ', f: 110, a: 0.9, h: 1.3, d: 1.4, peak: 0.12 });
+    // golden shimmer on top
+    const sh = this._g(c, 0.7);
+    link(this._osc(c, 'sine', 7, tc, tc + dur + 0.1), this._g(c, 0.3), sh.gain);
+    sh.connect(c.out);
+    for (const f of [1760, 2217.46, 2637, 3520, 4434.92]) this._tone(c, sh, tc + rand(0.2, 0.7), { f: f * rand(0.997, 1.003), a: 0.6, h: 1.0, d: 1.3, peak: 0.035 });
+    this._crackle(c, c.out, tc + 0.3, 2.6, { f: 7500, q: 1, count: 30, peak: 0.08, fade: 0.5 });
+  }
+
+  // Pickup for her golden reward: a warm strummed A major chord, golden bells and sparkle.
+  goldLeaf() {
+    const v = this._voice(P_CRIT, null, this.dry); if (!v) return;
+    const t = this._now(), o = v.out, lp = this._flt(v, 'lowpass', 2400, 0.7);
+    o.gain.value = 0.55;
+    lp.connect(o);
+    [220, 277.18, 329.63, 440, 554.37].forEach((f, i) => this._tone(v, lp, t + i * 0.028, { wave: 'organ', f, a: 0.01, h: 0.25, d: 1.1, peak: 0.09 }));
+    [[0.08, 1760], [0.15, 2217.46], [0.22, 2637], [0.3, 3520]].forEach(([dt, f]) => this._bell(v, o, t + dt, f, 0.9, 0.1, BELL));
+    this._crackle(v, o, t + 0.05, 0.9, { f: 7500, q: 1.2, count: 24, peak: 0.18, fade: 0.8 });
+    this._burst(v, o, t, { kind: 'pink', type: 'highpass', f: 5000, a: 0.15, d: 0.7, peak: 0.08 });
+  }
+
   // ---- internals: graph -----------------------------------------------------------------------
 
   _build() {
@@ -1322,7 +1773,177 @@ export class AudioEngine {
     }
     return g;
   }
+
+  // ---- internals: hounds and porcelain --------------------------------------------------------
+
+  // Token bucket per sound family (`cap` burst, `rate` per second) for sounds called in bulk.
+  _take(key, cap, rate) {
+    const now = this.ctx.currentTime;
+    const b = this._buckets[key] || (this._buckets[key] = { n: cap, t: now });
+    b.n = Math.min(cap, b.n + Math.max(0, now - b.t) * rate);
+    b.t = now;
+    if (b.n < 1) return false;
+    b.n -= 1;
+    return true;
+  }
+
+  // Deterministic per-seed hound voice (shape matches _zv so _throat can use it).
+  _hv(seed) {
+    const key = seedInt(seed);
+    let h = this._hcache.get(key);
+    if (!h) {
+      const r = mulberry(key ^ 0x2c1b3c6d);
+      h = {
+        f0: 46 + r() * 30,
+        bark: 210 + r() * 150,
+        tract: 1.0 + r() * 0.35,
+        rough: 22 + r() * 20,
+        wet: 0.3 + r() * 0.6,
+        snarl: r(),
+        len: r(),
+        va: VOWELS[2],
+        vb: VOWELS[3],
+      };
+      if (this._hcache.size > 256) this._hcache.clear();
+      this._hcache.set(key, h);
+    }
+    return h;
+  }
+
+  // Stereo placement inside one voice (falls back to a plain gain).
+  _pan(v, p) {
+    const c = this.ctx;
+    if (typeof c.createStereoPanner !== 'function') return this._g(v, 1);
+    const sp = c.createStereoPanner();
+    sp.pan.value = clamp(p, -1, 1);
+    v.nodes.push(sp);
+    return sp;
+  }
+
+  // Feedback echo into `dest`; returns its input. Lives only as long as the voice's sources.
+  _echo(v, dest, time, fb, lpf, wet) {
+    const d = this.ctx.createDelay(1);
+    d.delayTime.value = time;
+    v.nodes.push(d);
+    const inp = this._g(v, 1), lp = this._flt(v, 'lowpass', lpf, 0.7);
+    link(inp, d, lp, this._g(v, fb), d);
+    link(lp, this._g(v, wet), dest);
+    return inp;
+  }
+
+  // Unearthly howl: a detuned saw pair and sub, pitch-bent along `shape`, through oo-aa-oo
+  // formants, with a ghostly sine a tritone above the octave riding the same contour.
+  _howl(v, dest, t, dur, f0, peak = 1, shape = HOWL) {
+    const end = t + dur + 0.05;
+    const bend = (p, mul) => {
+      p.setValueAtTime(f0 * mul * shape[0][1], t);
+      for (let i = 1; i < shape.length; i++) p.linearRampToValueAtTime(f0 * mul * shape[i][1], t + dur * shape[i][0]);
+    };
+    const vib = this._g(v, 0), mix = this._g(v, 1), eg = this._g(v);
+    this._osc(v, 'sine', rand(4.5, 6), t, end).connect(vib);
+    vib.gain.setValueAtTime(0, t);
+    vib.gain.linearRampToValueAtTime(28, t + dur * 0.5);
+    for (const [mul, det, amp] of [[1, -7, 0.6], [1, 8, 0.6], [0.5, 0, 0.35]]) {
+      const o = this._osc(v, 'sawtooth', f0 * mul, t, end);
+      o.detune.value = det;
+      bend(o.frequency, mul);
+      vib.connect(o.detune);
+      link(o, this._g(v, amp), mix);
+    }
+    ahr(eg.gain, t, dur * 0.18, dur * 0.45, dur * 0.37, 2.2 * peak);
+    const OO = VOWELS[1], AA = VOWELS[0];
+    for (let i = 0; i < 3; i++) {
+      const bp = this._flt(v, 'bandpass', OO[i] * 1.1, 7);
+      bp.frequency.setValueAtTime(OO[i] * 1.1, t);
+      bp.frequency.linearRampToValueAtTime(AA[i] * 1.1, t + dur * 0.25);
+      bp.frequency.linearRampToValueAtTime(OO[i] * 1.1, t + dur * 0.95);
+      link(mix, bp, eg);
+    }
+    eg.connect(dest);
+    const gh = this._osc(v, 'sine', f0 * 2.83, t, end), gg = this._g(v);
+    bend(gh.frequency, 2.83);
+    vib.connect(gh.detune);
+    ahr(gg.gain, t + dur * 0.1, dur * 0.3, dur * 0.3, dur * 0.3, 0.05 * peak);
+    link(gh, gg, dest);
+  }
+
+  // Porcelain impact: a hard tick and inharmonic ceramic partials (k scales pitch, s level).
+  _porcelain(v, dest, t, k = 1, s = 1) {
+    this._burst(v, dest, t, { type: 'highpass', f: 5000, d: 0.006, peak: 0.9 * s });
+    this._burst(v, dest, t, { f: 3200 * k, q: 2, d: 0.02, peak: 0.7 * s });
+    for (const [f, d, p] of PORCELAIN) this._tone(v, dest, t, { f: f * k * rand(0.99, 1.01), d, peak: p * s });
+  }
+
+  // `n` tiny pitched shard pings, denser early and thinning out over `dur`.
+  _shards(v, dest, t, dur, n, k, peak) {
+    for (let i = 0; i < n; i++) {
+      const ti = t + dur * Math.pow(Math.random(), 1.6);
+      this._tone(v, dest, ti, { f: rand(2600, 7500) * k, d: rand(0.03, 0.11), peak: peak * rand(0.35, 1) * (1 - (0.6 * (ti - t)) / dur) });
+    }
+  }
+
+  // Big porcelain smash: driven crack, body thump, crunch, then shards tinkling for ~len s.
+  _smash(v, t, k = 1, len = 1) {
+    const o = v.out, m = this._g(v, 1);
+    link(m, this._ws(v, this.curves.hard), o);
+    this._burst(v, m, t, { type: 'highpass', f: 3000, d: 0.012, peak: 1.1 * k });
+    this._burst(v, m, t, { f: 2600, q: 0.8, d: 0.08, peak: 0.8 * k });
+    this._tone(v, m, t, { f: 160, f2: 60, d: 0.18, peak: 0.7 * k });
+    this._porcelain(v, o, t, 0.8, 0.9 * k);
+    this._burst(v, o, t + 0.005, { kind: 'pink', f: 3000, f2: 1400, q: 0.9, a: 0.005, d: 0.3, peak: 0.55 * k });
+    this._shards(v, o, t + 0.02, len, Math.round(12 + 6 * len), 1, 0.24);
+    this._crackle(v, o, t + 0.02, len, { f: 5200, q: 5, count: Math.round(40 * len), peak: 0.55, spread: 1.3, len: 0.006, fade: 0.4 });
+    this._crackle(v, o, t + 0.05, len * 0.9, { f: 2400, q: 3, count: Math.round(18 * len), peak: 0.45, spread: 1.4, len: 0.01, fade: 0.5 });
+  }
+
+  // Reversed tone: exponential swell from t that snaps off at tEnd.
+  _swell(v, dest, t, tEnd, f, peak) {
+    const o = this._osc(v, 'sine', f, t, tEnd + 0.06), g = this._g(v);
+    g.gain.setValueAtTime(Math.max(peak * 0.03, EPS), t);
+    g.gain.exponentialRampToValueAtTime(Math.max(peak, 2 * EPS), tEnd);
+    g.gain.exponentialRampToValueAtTime(EPS, tEnd + 0.04);
+    link(o, g, dest);
+  }
+
+  // Unbudgeted short-lived voice feeding `dest`: notes scheduled inside a background loop.
+  _sub(dest) {
+    const t = this.ctx.currentTime;
+    const v = { prio: P_LOW, t0: t, end: t + 0.5, nodes: [], srcs: [], live: 0, dying: false, done: false, bg: true, out: null };
+    this.voices.push(v);
+    v.out = this._g(v, 1);
+    v.out.connect(dest);
+    return v;
+  }
+
+  // Look-ahead scheduler for bossMusic: keeps ~1.6 s of bars queued (driven by update() and a timer).
+  _bossTick(st) {
+    if (st.stopped || !this._ok()) return;
+    const now = this.ctx.currentTime;
+    if (st.subs.length > 4) st.subs = st.subs.filter((s) => !s.done);
+    if (st.next < now) st.next = now + 0.05;   // fell behind (throttled tab): skip ahead, never burst
+    while (st.next < now + 1.6) {
+      this._bossBar(st, st.next, st.bar++);
+      st.next += 3 * BOSS_BEAT;
+    }
+  }
+
+  // One 3/4 bar: lullaby on celesta (every other phrase a sour semitone lower) over a low note.
+  _bossBar(st, t, bar) {
+    const v = this._sub(st.bus);
+    st.subs.push(v);
+    const shift = (bar >> 2) % 2 ? -1 : 0;
+    v.out.gain.value = 0.9;
+    for (let b = 0; b < 3; b++) {
+      const n = LULLABY[(bar * 3 + b) % LULLABY.length] + shift;
+      const cents = Math.random() < 0.12 ? rand(-45, -25) : rand(-6, 6);
+      this._bell(v, v.out, t + b * BOSS_BEAT + rand(0, 0.015), semi(880, n + cents / 100), 1.3, b === 0 ? 0.1 : 0.075, CELESTA);
+    }
+    this._bell(v, v.out, t, semi(220, LULLABY_BASS[bar % 4] + shift), 1.8, 0.07, CELESTA);
+  }
 }
+
+// Fallback results so handle-returning methods stay safe to use even if synthesis throws.
+const FALLBACK = { __proto__: null, radioSong: NOOP_HANDLE, bossMusic: NOOP_HANDLE, houndGrowl: NOOP_TRACK, houndBark: NOOP_TRACK, figurineChime: NOOP_TRACK };
 
 // Public methods never throw: runtime errors are swallowed (reported to opts.onError if given).
 for (const name of Object.getOwnPropertyNames(AudioEngine.prototype)) {
@@ -1336,7 +1957,7 @@ for (const name of Object.getOwnPropertyNames(AudioEngine.prototype)) {
         return fn.apply(this, args);
       } catch (e) {
         try { if (this._onError) this._onError(name, e); } catch { /* ignore */ }
-        return name === 'radioSong' ? NOOP_HANDLE : undefined;
+        return FALLBACK[name];
       }
     },
   });

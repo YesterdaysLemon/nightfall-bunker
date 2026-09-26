@@ -46,6 +46,10 @@ for (const s of styles) {
   } else {
     console.log(`${s.id}: ${frames.length} turntable frames (need 24), spin disabled`);
   }
+  if (existsSync(join(dir, 'ingame.png'))) {
+    ff('-i', join(dir, 'ingame.png'), '-q:v', '3', join(out, 'ingame.jpg'));
+    img.ingame = `a/${s.id}/ingame.jpg`;
+  }
   const concept = join(SRC, 'concepts', `${s.id}.png`);
   if (existsSync(concept)) {
     ff('-i', concept, '-vf', 'scale=1600:-2:flags=lanczos', '-q:v', '4', join(out, 'concept.jpg'));

@@ -6,14 +6,14 @@
 
 import {
   WINDOWS, MAX_BOARDS, DOORS, WALL_BUYS, MYSTERY_BOX, SPAWNS, PLAYER_SPAWNS,
-  IX0, IX1, IZ0, IZ1, LOFT_Y, stairHeightAt, RADIO,
+  IX0, IX1, IZ0, IZ1, LOFT_Y, stairHeightAt, RADIO, EGG, zoneAt,
 } from './map.js';
-import { World, zombieHitTest } from './world.js';
+import { World, enemyHitTest, raySphere } from './world.js';
 import { NavGrid } from './nav.js';
 import {
   WEAPONS, BOX_POOL, BOX_COST, WALL_PRICES, START_WEAPON, KNIFE, GRENADE, MAX_PRIMARIES,
 } from './weapons.js';
-import { ZS, PS, POWERUPS } from './protocol.js';
+import { ZS, ZC, PS, POWERUPS } from './protocol.js';
 
 export const TICK = 1 / 20;
 const MAX_ALIVE = 24;
@@ -21,6 +21,18 @@ const START_POINTS = 500;
 const BOX_ROLL = 4.2, BOX_OFFER = 12;
 const BLEED_OUT = 30, REVIVE_TIME = 3;
 const POWERUP_LIFE = 26;
+const WARP_TIME = 0.9;                 // lightning strike -> hound on its feet
+const SHATTER_TIME = 1.3, REFORM_TIME = 0.6;
+
+// Per-class melee: how close to start a swing, wind-up, reach when it lands,
+// damage, and recovery.
+const MELEE = {
+  [ZC.WALKER]: { start: 1.05, windup: 0.4, reach: 1.45, dmg: 40, cool: 0.95 },
+  [ZC.JOGGER]: { start: 1.05, windup: 0.4, reach: 1.45, dmg: 40, cool: 0.95 },
+  [ZC.RUNNER]: { start: 1.05, windup: 0.28, reach: 1.45, dmg: 45, cool: 0.65 },
+  [ZC.HOUND]: { start: 1.7, windup: 0.3, reach: 1.9, dmg: 25, cool: 0.75 },
+  [ZC.KINTSUGI]: { start: 1.3, windup: 0.45, reach: 1.7, dmg: 50, cool: 1.2 },
+};
 
 export function roundHealth(r) {
   if (r < 10) return 150 + (r - 1) * 100;
@@ -31,6 +43,19 @@ export function roundCount(r, players) {
   const table = [6, 8, 13, 18, 24, 27, 28, 28, 29, 33];
   const solo = r <= 10 ? table[r - 1] : 33 + (r - 10) * 4;
   return Math.round(solo * (1 + 0.5 * (Math.max(1, players) - 1)));
+}
+
+// Hound rounds: fewer, faster, frailer enemies that appear inside the bunker.
+export function houndCount(r, players) {
+  return Math.round((7 + Math.floor(r / 4)) * (1 + 0.6 * (Math.max(1, players) - 1)));
+}
+
+export function houndHealth(r) {
+  return Math.max(150, Math.round(roundHealth(r) * 0.45));
+}
+
+export function bossHealth(r, players) {
+  return Math.round(1800 + 1800 * Math.max(1, players) + 150 * r);
 }
 
 function mulberry(seed) {
@@ -47,8 +72,15 @@ function mulberry(seed) {
 const r2 = (v) => Math.round(v * 100);
 
 export class GameSim {
-  constructor({ seed = Date.now() & 0xffffffff, solo = false } = {}) {
+  constructor({ seed = Date.now() & 0xffffffff, solo = false, firstHoundRound = null } = {}) {
     this.rng = mulberry(seed);
+    // Separate stream so hound scheduling never disturbs zombie randomness.
+    this.houndRng = mulberry(seed ^ 0x9e3779b9);
+    this.houndRound = false;
+    this.nextHoundRound = firstHoundRound ?? 5 + Math.floor(this.houndRng() * 3);
+    // Easter egg: three teacups, then the figurine, then her.
+    this.egg = { cups: EGG.cups.map(() => false), stage: 'cups', spawnT: 0 };
+    this.boss = null;
     this.solo = solo;
     this.world = new World();
     this.nav = new NavGrid();
@@ -134,6 +166,8 @@ export class GameSim {
         if (p.weapons.includes(m.w) || (m.w === START_WEAPON && p.state === PS.DOWN)) p.cur = m.w;
         return;
       case 'radio': return this.onRadio(p);
+      case 'cup': return this.onCup(p, m);
+      case 'egg': return this.onFigurine(p);
       case 'chat':
         if (typeof m.m === 'string' && m.m.trim()) this.emit(['chat', p.id, m.m.trim().slice(0, 120)]);
         return;
@@ -193,7 +227,7 @@ export class GameSim {
     for (const h of hits) {
       if (!Array.isArray(h)) continue;
       const z = this.zombies.get(h[0] | 0);
-      if (!z || z.hp <= 0) continue;
+      if (!z || z.hp <= 0 || z.state === ZS.WARP) continue;
       const part = Math.max(0, Math.min(2, h[1] | 0));
       const dist = Math.hypot(z.x - p.x, z.y - p.y, z.z - p.z);
       if (dist > W.range + 4) continue;
@@ -248,6 +282,43 @@ export class GameSim {
     if (Math.hypot(p.x - RADIO.pos[0], p.z - RADIO.pos[2]) > 2.4 || p.y > 1.5) return;
     this.radioT = this.time + 20;
     this.emit(['radio']);
+  }
+
+  // --- Easter egg ----------------------------------------------------------------
+  // A client claims its shot hit teacup `i`; check the ray and the line of sight.
+  onCup(p, m) {
+    if (this.egg.stage !== 'cups' || p.state !== PS.ALIVE) return;
+    const i = m.i | 0;
+    const cup = EGG.cups[i];
+    if (!cup || this.egg.cups[i]) return;
+    const o = vec3(m.o), d = vec3(m.d);
+    if (!o || !d) return;
+    if (Math.hypot(o[0] - p.x, o[2] - p.z) > 2 || Math.abs(o[1] - (p.y + 1.4)) > 1.4) return;
+    const len = Math.hypot(d[0], d[1], d[2]) || 1;
+    const [cx, cy, cz] = [cup.pos[0], cup.pos[1] + 0.05, cup.pos[2]];
+    const t = raySphere(o[0], o[1], o[2], d[0] / len, d[1] / len, d[2] / len, cx, cy, cz, EGG.cupRadius * 1.6);
+    if (t < 0 || t > 90) return;
+    if (!this.world.lineOfSight(o[0], o[1], o[2], cx, cy, cz)) return;
+    this.breakCup(i, p.id);
+  }
+
+  breakCup(i, by) {
+    if (this.egg.stage !== 'cups' || this.egg.cups[i]) return;
+    this.egg.cups[i] = true;
+    this.emit(['cup', i, by]);
+    if (this.egg.cups.every(Boolean)) {
+      this.egg.stage = 'ready';
+      this.emit(['egg', 'ready']);
+    }
+  }
+
+  onFigurine(p) {
+    if (this.egg.stage !== 'ready' || p.state !== PS.ALIVE) return;
+    const f = EGG.figurine.pos;
+    if (Math.hypot(p.x - f[0], p.z - f[2]) > 2.2 || p.y > 1.2) return;
+    this.egg.stage = 'awake';
+    this.egg.spawnT = 3.6;
+    this.emit(['egg', 'wake', p.id]);
   }
 
   // --- Purchases --------------------------------------------------------------
@@ -325,16 +396,23 @@ export class GameSim {
     this.emit(['pts', p.id, v, p.points, reason]);
   }
 
+  // Can this enemy be hurt right now? The boss is untouchable mid-teleport.
+  vulnerable(z) {
+    return z.hp > 0 && !(z.cls === ZC.KINTSUGI && (z.state === ZS.SHATTER || z.state === ZS.REFORM));
+  }
+
   damageZombie(z, dmg, p, kind, dir) {
-    if (z.hp <= 0) return;
-    if (this.insta > 0) dmg = z.hp + 1;
+    if (!this.vulnerable(z)) return;
+    const boss = z.cls === ZC.KINTSUGI;
+    if (this.insta > 0 && !boss) dmg = z.hp + 1;
     z.hp -= dmg;
     if (z.hp > 0) {
       this.addPoints(p, 10);
       this.emit(['zhit', z.id, kind === 'head' ? 0 : 1]);
+      if (boss) this.bossDamaged(z);
       return;
     }
-    const pts = kind === 'head' ? 100 : kind === 'knife' ? 130 : 50;
+    const pts = boss ? 500 : kind === 'head' ? 100 : kind === 'knife' ? 130 : 50;
     this.addPoints(p, pts);
     if (p) { p.kills++; if (kind === 'head') p.headshots++; }
     this.killZombie(z, p ? p.id : null, kind, dir);
@@ -348,20 +426,40 @@ export class GameSim {
     this.stats.zombies++;
     const dx = dir ? dir[0] : 0, dz = dir ? dir[2] : 0;
     this.emit(['kill', z.id, by, kind === 'head' ? 1 : kind === 'explode' ? 2 : kind === 'nuke' ? 3 : 0, r2(z.x), r2(z.y), r2(z.z), Math.round(Math.atan2(dx, dz) * 100)]);
+    if (z.cls === ZC.KINTSUGI) {
+      this.boss = null;
+      this.egg.stage = 'done';
+      this.dropPowerup('goldleaf', z.x, z.y, z.z, 90);
+      return;
+    }
+    if (z.cls === ZC.HOUND) {
+      // The last hound of the pack always leaves a Max Ammo behind.
+      const packLeft = this.toSpawn > 0 || [...this.zombies.values()].some((q) => q.cls === ZC.HOUND);
+      if (this.houndRound && !packLeft) this.dropPowerup('maxammo', z.x, z.y, z.z);
+      return;
+    }
     if (kind !== 'nuke') this.maybeDrop(z);
   }
 
   maybeDrop(z) {
-    if (this.dropsThisRound >= 4) return;
+    if (this.houndRound || this.dropsThisRound >= 4) return;
     if (z.x < IX0 + 0.3 || z.x > IX1 - 0.3 || z.z < IZ0 + 0.3 || z.z > IZ1 - 0.3) return;
     if (this.rng() > 0.03 + Math.min(0.03, this.killsThisRound * 0.0015)) return;
     const missing = this.windows.some((w) => w.boards < MAX_BOARDS);
     const types = POWERUPS.filter((t) => t !== 'carpenter' || missing);
     const type = types[Math.floor(this.rng() * types.length)];
-    const pu = { id: this.nextPu++, type, x: z.x, y: z.y, z: z.z, t: POWERUP_LIFE };
-    this.powerups.push(pu);
+    this.dropPowerup(type, z.x, z.y, z.z);
     this.dropsThisRound++;
+  }
+
+  // Place a power-up, nudged inside the walls so nobody has to fetch it from a window.
+  dropPowerup(type, x, y, z, life = POWERUP_LIFE) {
+    x = Math.max(IX0 + 0.6, Math.min(IX1 - 0.6, x));
+    z = Math.max(IZ0 + 0.6, Math.min(IZ1 - 0.6, z));
+    const pu = { id: this.nextPu++, type, x, y, z, t: life };
+    this.powerups.push(pu);
     this.emit(['pu', pu.id, type, r2(pu.x), r2(pu.y), r2(pu.z)]);
+    return pu;
   }
 
   applyPowerup(pu, p) {
@@ -373,8 +471,19 @@ export class GameSim {
       case 'instakill': this.insta = 30; break;
       case 'doublepoints': this.double = 30; break;
       case 'nuke': {
-        for (const z of [...this.zombies.values()]) this.killZombie(z, null, 'nuke', null);
+        for (const z of [...this.zombies.values()]) if (z.cls !== ZC.KINTSUGI) this.killZombie(z, null, 'nuke', null);
         for (const q of this.activePlayers()) if (q.state !== PS.DEAD) this.addPoints(q, 400, 2);
+        break;
+      }
+      case 'goldleaf': {
+        // The porcelain boss's gift: the Arc Pistol for whoever grabs it, gold for everyone.
+        if (p.weapons.includes('arcpistol')) this.emit(['ammo', p.id, 'arcpistol']);
+        else { this.giveWeapon(p, 'arcpistol'); this.emit(['give', p.id, 'arcpistol', p.weapons.join(',')]); }
+        for (const q of this.activePlayers()) {
+          if (q.state === PS.DEAD) continue;
+          q.grenades = GRENADE.max;
+          this.addPoints(q, 1000, 2);
+        }
         break;
       }
       case 'carpenter': {
@@ -430,8 +539,16 @@ export class GameSim {
   startRound() {
     this.round++;
     this.phase = 'round';
-    this.toSpawn = roundCount(this.round, this.activePlayers().length);
-    this.spawnT = 1.5;
+    const n = this.activePlayers().length;
+    this.houndRound = this.round === this.nextHoundRound;
+    if (this.houndRound) {
+      this.nextHoundRound = this.round + 4 + Math.floor(this.houndRng() * 2);
+      this.toSpawn = houndCount(this.round, n);
+      this.spawnT = 3.5; // let the fog roll in and the howls finish first
+    } else {
+      this.toSpawn = roundCount(this.round, n);
+      this.spawnT = 1.5;
+    }
     this.killsThisRound = 0;
     this.dropsThisRound = 0;
     for (const p of this.players.values()) {
@@ -446,6 +563,61 @@ export class GameSim {
       p.boardPts = 0;
     }
     this.emit(['round', this.round, this.toSpawn]);
+    if (this.houndRound) this.emit(['hounds', this.round]);
+  }
+
+  // A hound appears on a walkable cell a few metres from a random living player,
+  // on their floor, out of arm's reach of everyone. Returns false if nowhere fits.
+  spawnHound() {
+    const alive = this.activePlayers().filter((p) => p.state === PS.ALIVE);
+    if (!alive.length) return false;
+    const target = alive[Math.floor(this.houndRng() * alive.length)];
+    const nav = this.nav;
+    const pick = (near, far) => {
+      const out = [];
+      for (let i = 0; i < nav.walk.length; i++) {
+        if (!nav.walk[i]) continue;
+        const c = nav.center(i);
+        if (stairHeightAt(c[0], c[2]) !== null || Math.abs(c[1] - target.y) > 0.8) continue;
+        if (!this.zones.has(zoneAt(c[0], c[1] + 0.1, c[2]))) continue;
+        const d = Math.hypot(c[0] - target.x, c[2] - target.z);
+        if (d < near || d > far) continue;
+        if (alive.some((p) => Math.hypot(c[0] - p.x, c[2] - p.z) < 3.2 && Math.abs(c[1] - p.y) < 1)) continue;
+        out.push(c);
+      }
+      return out;
+    };
+    let cands = pick(4.5, 10);
+    if (!cands.length) cands = pick(3.3, 16);
+    if (!cands.length) return false;
+    const c = cands[Math.floor(this.houndRng() * cands.length)];
+    const hp = houndHealth(this.round);
+    const h = {
+      id: this.nextZid++, cls: ZC.HOUND, speed: 5.3 + this.houndRng() * 0.9 + Math.min(0.8, Math.max(0, this.round - 6) * 0.08),
+      hp, maxHp: hp, x: c[0], y: c[1], z: c[2], yaw: Math.atan2(target.x - c[0], target.z - c[2]),
+      state: ZS.WARP, t: WARP_TIME, win: null, lv: c[1] > 1 ? 1 : 0, atk: 0, cell: -1, stuck: 0, cool: 0.4,
+    };
+    this.zombies.set(h.id, h);
+    this.emit(['strike', r2(h.x), r2(h.y), r2(h.z)]);
+    this.emit(['zspawn', h.id, ZC.HOUND, 0]);
+    return true;
+  }
+
+  // Kintsugi steps out of the air in the help room, where her figurine stood watch.
+  spawnBoss() {
+    const [bx, by, bz] = EGG.boss;
+    let i = this.nav.locateStrict(bx, by, bz);
+    if (i < 0) i = this.nav.locate(bx, by, bz);
+    const c = i >= 0 ? this.nav.center(i) : [bx, by, bz];
+    const hp = bossHealth(this.round, this.activePlayers().length);
+    const k = {
+      id: this.nextZid++, cls: ZC.KINTSUGI, speed: 1.35, hp, maxHp: hp, x: c[0], y: c[1], z: c[2], yaw: -Math.PI / 2,
+      state: ZS.REFORM, t: 1.4, win: null, lv: 0, atk: 0, cell: -1, stuck: 0, cool: 1, shT: 9, stage: 0, watched: false,
+    };
+    this.zombies.set(k.id, k);
+    this.boss = k;
+    this.emit(['zspawn', k.id, ZC.KINTSUGI, 0]);
+    this.emit(['kreform', k.id, r2(k.x), r2(k.y), r2(k.z)]);
   }
 
   pickSpawn() {
@@ -506,6 +678,10 @@ export class GameSim {
     }
 
     this.stepPhase(dt);
+    if (this.egg.spawnT > 0) {
+      this.egg.spawnT -= dt;
+      if (this.egg.spawnT <= 0) this.spawnBoss();
+    }
     this.stepPlayers(dt);
     this.navT -= dt;
     if (this.navT <= 0) {
@@ -527,7 +703,16 @@ export class GameSim {
       return;
     }
     if (this.phase === 'round') {
-      if (this.toSpawn > 0) {
+      if (this.toSpawn > 0 && this.houndRound) {
+        this.spawnT -= dt;
+        const cap = Math.min(MAX_ALIVE, 2 + 2 * this.activePlayers().length);
+        let hounds = 0;
+        for (const z of this.zombies.values()) if (z.cls === ZC.HOUND) hounds++;
+        if (this.spawnT <= 0 && hounds < cap) {
+          if (this.spawnHound()) this.toSpawn--;
+          this.spawnT = 0.7 + this.houndRng() * 1.1;
+        }
+      } else if (this.toSpawn > 0) {
         this.spawnT -= dt;
         if (this.spawnT <= 0 && this.zombies.size < MAX_ALIVE) {
           this.spawnZombie();
@@ -537,7 +722,8 @@ export class GameSim {
       } else if (this.zombies.size === 0) {
         this.phase = 'break';
         this.phaseT = 10;
-        this.emit(['rend', this.round]);
+        this.emit(['rend', this.round, this.houndRound ? 1 : 0]);
+        this.houndRound = false;
       }
     }
   }
@@ -611,9 +797,13 @@ export class GameSim {
     const list = [...this.zombies.values()];
     for (const z of list) {
       z.t -= dt;
+      if (z.cls === ZC.KINTSUGI) { this.zBoss(z, dt); continue; }
       switch (z.state) {
         case ZS.RISE:
           if (z.t <= 0) z.state = ZS.WINDOW_WALK;
+          break;
+        case ZS.WARP:
+          if (z.t <= 0) { z.state = ZS.CHASE; this.emit(['zatk', z.id]); }
           break;
         case ZS.WINDOW_WALK: this.zWindowWalk(z, dt); break;
         case ZS.TEAR: this.zTear(z, dt); break;
@@ -734,8 +924,10 @@ export class GameSim {
     else if (ok(nx, z.z)) z.x = nx;
     else if (ok(z.x, nz)) z.z = nz;
     else moved = false;
-    // Keep bodies out of walls and furniture.
-    const p = this.world._pushOut(z.x, z.z, z.y + 0.55, z.y + 1.6, 0.26);
+    // Keep bodies out of walls and furniture (hounds are low and narrow).
+    const p = z.cls === ZC.HOUND
+      ? this.world._pushOut(z.x, z.z, z.y + 0.25, z.y + 0.9, 0.24)
+      : this.world._pushOut(z.x, z.z, z.y + 0.55, z.y + 1.6, 0.26);
     if (p && ok(p[0], p[1])) { z.x = p[0]; z.z = p[1]; }
     return moved;
   }
@@ -746,7 +938,7 @@ export class GameSim {
     const nav = this.nav;
     const cell = nav.locate(z.x, z.y, z.z);
     let tx = p.x, tz = p.z;
-    const direct = pd < 2.2 && Math.abs(p.y - z.y) < 0.8;
+    const direct = pd < (z.cls === ZC.HOUND ? 3 : 2.2) && Math.abs(p.y - z.y) < 0.8;
     if (!direct && cell >= 0) {
       const n1 = nav.next(cell);
       if (n1 >= 0) {
@@ -760,7 +952,7 @@ export class GameSim {
     if (d > 0.02) {
       const s = Math.min(d, z.speed * dt);
       if (!this.tryMove(z, (dx / d) * s, (dz / d) * s)) z.stuck += dt; else z.stuck = 0;
-      z.yaw = turnToward(z.yaw, Math.atan2(dx, dz), dt * (z.cls === 2 ? 9 : 5));
+      z.yaw = turnToward(z.yaw, Math.atan2(dx, dz), dt * (z.cls === ZC.RUNNER ? 9 : z.cls === ZC.HOUND ? 11 : 5));
     }
     // Height follows the floor: stairs are a smooth ramp.
     const sh = stairHeightAt(z.x, z.z);
@@ -773,25 +965,113 @@ export class GameSim {
       z.stuck = 0;
     }
     z.cool = Math.max(0, (z.cool || 0) - dt);
-    if (z.cool <= 0 && Math.hypot(p.x - z.x, p.z - z.z) < 1.05 && Math.abs(p.y - z.y) < 1.2) {
+    const M = MELEE[z.cls] || MELEE[ZC.WALKER];
+    if (z.cool <= 0 && Math.hypot(p.x - z.x, p.z - z.z) < M.start && Math.abs(p.y - z.y) < 1.2) {
       z.state = ZS.ATTACK;
-      z.t = z.cls === 2 ? 0.28 : 0.4;
+      z.t = M.windup;
       z.atkTarget = p.id;
       this.emit(['zatk', z.id]);
     }
   }
 
   zAttack(z, dt) {
+    const M = MELEE[z.cls] || MELEE[ZC.WALKER];
     const p = this.players.get(z.atkTarget);
     if (p) z.yaw = turnToward(z.yaw, Math.atan2(p.x - z.x, p.z - z.z), dt * 8);
+    // Hounds leap at their target during the wind-up.
+    if (z.cls === ZC.HOUND && p && z.t > 0) {
+      const dx = p.x - z.x, dz = p.z - z.z, d = Math.hypot(dx, dz);
+      if (d > 0.7) this.tryMove(z, (dx / d) * Math.min(d - 0.7, z.speed * 1.3 * dt), (dz / d) * Math.min(d - 0.7, z.speed * 1.3 * dt));
+    }
     if (z.t > 0) return;
-    if (p && p.state === PS.ALIVE && Math.hypot(p.x - z.x, p.z - z.z) < 1.45 && Math.abs(p.y - z.y) < 1.3) {
-      this.hurtPlayer(p, z.cls === 2 ? 45 : 40, z);
+    if (p && p.state === PS.ALIVE && Math.hypot(p.x - z.x, p.z - z.z) < M.reach && Math.abs(p.y - z.y) < 1.3) {
+      this.hurtPlayer(p, M.dmg, z);
     }
     z.state = ZS.CHASE;
     z.t = 0;
     z.stuck = 0;
-    z.cool = z.cls === 2 ? 0.65 : 0.95;
+    z.cool = M.cool;
+  }
+
+  // --- The porcelain boss ----------------------------------------------------------------
+  // Slow while anyone is looking at her, quick the moment nobody is. Every few
+  // seconds (and whenever a big piece breaks off) she shatters and re-forms
+  // behind one of the players.
+  zBoss(z, dt) {
+    switch (z.state) {
+      case ZS.REFORM:
+        if (z.t <= 0) { z.state = ZS.CHASE; z.cool = 0.2; }
+        return;
+      case ZS.SHATTER:
+        if (z.t <= 0) this.bossReform(z);
+        return;
+      case ZS.ATTACK:
+        this.zAttack(z, dt);
+        return;
+      default: {
+        z.watched = this.bossWatched(z);
+        z.speed = z.watched ? 1.35 : 4.4;
+        z.shT -= dt;
+        const [p, pd] = this.nearestAlive(z.x, z.y, z.z);
+        if (z.shT <= 0 && p && pd > 2.5) { this.bossShatter(z); return; }
+        this.zChase(z, dt);
+      }
+    }
+  }
+
+  bossWatched(z) {
+    for (const p of this.players.values()) {
+      if (!p.connected || p.state !== PS.ALIVE) continue;
+      const ex = p.x, ey = p.y + 1.55, ez = p.z;
+      const vx = z.x - ex, vy = z.y + 1.2 - ey, vz = z.z - ez;
+      const d = Math.hypot(vx, vy, vz);
+      if (d > 40 || d < 1e-3) continue;
+      const cp = Math.cos(p.pitch);
+      const fx = -Math.sin(p.yaw) * cp, fy = Math.sin(p.pitch), fz = -Math.cos(p.yaw) * cp;
+      if ((vx * fx + vy * fy + vz * fz) / d < 0.8) continue;
+      if (this.world.lineOfSight(ex, ey, ez, z.x, z.y + 1.2, z.z)) return true;
+    }
+    return false;
+  }
+
+  bossDamaged(z) {
+    const stage = Math.min(3, Math.floor((1 - z.hp / z.maxHp) * 4));
+    if (stage <= z.stage) return;
+    z.stage = stage;
+    this.emit(['kstage', z.id, stage]);
+    if (z.state === ZS.CHASE || z.state === ZS.ATTACK) this.bossShatter(z);
+  }
+
+  bossShatter(z) {
+    const alive = this.activePlayers().filter((p) => p.state === PS.ALIVE);
+    z.state = ZS.SHATTER;
+    z.t = SHATTER_TIME;
+    z.shT = 8 + this.rng() * 5;
+    z.shTarget = alive.length ? alive[Math.floor(this.rng() * alive.length)].id : null;
+    this.emit(['kshatter', z.id, r2(z.x), r2(z.y), r2(z.z)]);
+  }
+
+  bossReform(z) {
+    const p = this.players.get(z.shTarget);
+    if (p && p.state === PS.ALIVE) {
+      // Behind them first, then to the sides, then anywhere close.
+      const bx = Math.sin(p.yaw), bz = Math.cos(p.yaw); // "behind" = opposite of view (-sin, -cos)
+      for (const a of [0, 0.6, -0.6, 1.2, -1.2, 1.9, -1.9, Math.PI]) {
+        const ca = Math.cos(a), sa = Math.sin(a);
+        const dx = bx * ca - bz * sa, dz = bx * sa + bz * ca;
+        const x = p.x + dx * 1.7, zz = p.z + dz * 1.7;
+        const i = this.nav.locateStrict(x, p.y, zz);
+        if (i < 0 || Math.abs(this.nav.height[i] - p.y) > 0.6) continue;
+        if (!this.world.lineOfSight(p.x, p.y + 1, p.z, x, p.y + 1, zz)) continue;
+        z.x = x; z.z = zz; z.y = this.nav.height[i];
+        break;
+      }
+      z.yaw = Math.atan2(p.x - z.x, p.z - z.z);
+    }
+    z.state = ZS.REFORM;
+    z.t = REFORM_TIME;
+    z.stuck = 0;
+    this.emit(['kreform', z.id, r2(z.x), r2(z.y), r2(z.z)]);
   }
 
   stepGrenades(dt) {
@@ -817,8 +1097,8 @@ export class GameSim {
       const dx = pr.vx / sp, dy = pr.vy / sp, dz = pr.vz / sp;
       let hitT = this.world.raycast(pr.x, pr.y, pr.z, dx, dy, dz, step);
       for (const z of this.zombies.values()) {
-        if (z.state === ZS.RISE && z.t > 0.8) continue;
-        const h = zombieHitTest(pr.x, pr.y, pr.z, dx, dy, dz, z.x, z.y, z.z, hitT);
+        if ((z.state === ZS.RISE && z.t > 0.8) || z.state === ZS.WARP || !this.vulnerable(z)) continue;
+        const h = enemyHitTest(z.cls, pr.x, pr.y, pr.z, dx, dy, dz, z.x, z.y, z.z, z.yaw, hitT);
         if (h) hitT = h.t;
       }
       if (hitT < step || pr.t > 4) {
@@ -833,10 +1113,23 @@ export class GameSim {
 
   explode(x, y, z, radius, damage, owner, kind, projId = 0) {
     this.emit(['boom', r2(x), r2(y), r2(z), kind, projId]);
+    // Blasts shatter teacups too.
+    if (this.egg.stage === 'cups') {
+      EGG.cups.forEach((c, i) => {
+        if (this.egg.cups[i] || Math.hypot(c.pos[0] - x, c.pos[1] - y, c.pos[2] - z) > radius * 0.6) return;
+        if (this.world.lineOfSight(x, y, z, c.pos[0], c.pos[1] + 0.05, c.pos[2])) this.breakCup(i, owner ? owner.id : null);
+      });
+    }
     for (const zb of [...this.zombies.values()]) {
-      const d = Math.hypot(zb.x - x, zb.y + 0.9 - y, zb.z - z);
+      if (!this.vulnerable(zb) || zb.state === ZS.WARP) continue;
+      const d = Math.hypot(zb.x - x, zb.y + (zb.cls === ZC.HOUND ? 0.5 : 0.9) - y, zb.z - z);
       if (d > radius) continue;
-      if (!this.world.lineOfSight(x, y, z, zb.x, zb.y + 1.0, zb.z) && d > 1.2) continue;
+      if (!this.world.lineOfSight(x, y, z, zb.x, zb.y + (zb.cls === ZC.HOUND ? 0.5 : 1.0), zb.z) && d > 1.2) continue;
+      if (zb.cls === ZC.KINTSUGI) {
+        // Splash only chips porcelain: half damage, never insta-kill.
+        this.damageZombie(zb, damage * (1 - (d / radius) * 0.6) * 0.5, owner, 'explode', [zb.x - x, 0, zb.z - z]);
+        continue;
+      }
       const dmg = damage * (1 - (d / radius) * 0.6);
       if (zb.hp - (this.insta > 0 ? Infinity : dmg) <= 0) {
         this.addPoints(owner, 50);
@@ -901,9 +1194,13 @@ export class GameSim {
         Math.round(q.hp), q.state, q.cur, q.points, q.flags, Math.round((q.revive / REVIVE_TIME) * 100), Math.round(q.bleed),
         q.kills, q.headshots, q.downs, q.revives, q.slot, q.grenades]);
     }
+    const b = this.boss;
     return {
       t: 's', k: this.tick, r: this.round, ph: this.phase, pt: Math.max(0, Math.round(this.phaseT * 10) / 10),
       ik: Math.ceil(this.insta), dp: Math.ceil(this.double), z, p,
+      hr: this.houndRound ? 1 : 0,
+      // Boss: [id, health per mille, damage stage, watched].
+      kb: b ? [b.id, Math.max(0, Math.round((b.hp / b.maxHp) * 1000)), b.stage, b.watched ? 1 : 0] : 0,
     };
   }
 
@@ -917,6 +1214,8 @@ export class GameSim {
       box: { state: this.box.state, weapon: this.box.weapon, owner: this.box.owner },
       powerups: this.powerups.map((u) => [u.id, u.type, r2(u.x), r2(u.y), r2(u.z)]),
       players: [...this.players.values()].map((q) => [q.id, q.name, q.slot]),
+      egg: { cups: [...this.egg.cups], stage: this.egg.stage },
+      hounds: this.houndRound,
       me: p && { x: p.x, y: p.y, z: p.z, yaw: p.yaw, weapons: p.weapons, cur: p.cur, points: p.points, grenades: p.grenades, state: p.state, hp: p.hp },
     };
   }

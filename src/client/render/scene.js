@@ -49,6 +49,18 @@ export class SceneRig {
     this.boom = new THREE.PointLight(0xff8a3a, 0, 16, 1.6);
     this.scene.add(this.boom);
     this.boomT = 0;
+    // Hound-round lightning and the easter-egg glow. Always present (intensity
+    // toggled) so the light count, and therefore every shader, never changes.
+    this.bolt = new THREE.PointLight(0xc9dbff, 0, 34, 1.2);
+    this.scene.add(this.bolt);
+    this.boltT = 0;
+    this.eggLight = new THREE.PointLight(0xffc35a, 0, 4.5, 1.6);
+    this.scene.add(this.eggLight);
+    // Dread: hound-round fog and dimmed bulbs (0 normal .. 1 full).
+    this.dread = 0;
+    this.dreadTarget = 0;
+    this.baseFog = this.fogColor.clone();
+    this.dreadFog = new THREE.Color(0x2b2824); // lighter haze: reads as fog, not just darkness
 
     this.sky = makeSky();
     this.scene.add(this.sky);
@@ -101,19 +113,48 @@ export class SceneRig {
     this.boomT = 0.45;
   }
 
+  // A lightning strike: a hard blue-white flash with a double flicker.
+  lightning(pos) {
+    this.bolt.position.set(pos.x, pos.y + 4, pos.z);
+    this.boltT = 0.42;
+  }
+
+  setDread(on) { this.dreadTarget = on ? 1 : 0; }
+
   update(dt, time) {
+    // Fog rolls in over ~3 s and lifts over ~5 s.
+    const rate = this.dreadTarget > this.dread ? 0.35 : 0.2;
+    this.dread += Math.max(-rate * dt, Math.min(rate * dt, this.dreadTarget - this.dread));
+    const dr = this.dread;
+    if (dr > 0 || this._dreadWas) {
+      this.fogColor.copy(this.baseFog).lerp(this.dreadFog, dr);
+      this.scene.fog.color.copy(this.fogColor);
+      this.scene.background.copy(this.fogColor);
+      this.scene.fog.density = 0.032 + dr * 0.068;
+      this.hemi.intensity = 1.1 * (1 - dr * 0.45);
+      this.moon.intensity = 1.3 * (1 - dr * 0.7);
+      this._dreadWas = dr > 0;
+    }
     for (const b of this.bulbs) {
       let k;
       if (b.fire) {
         k = 0.75 + 0.18 * Math.sin(time * 9 + b.seed) + 0.12 * Math.sin(time * 23.7 + b.seed * 2);
       } else {
         const n = Math.sin(time * 2.3 + b.seed) * Math.sin(time * 5.1 + b.seed * 0.7);
-        const cut = b.flicker > 0.5 && Math.sin(time * 0.9 + b.seed) > 0.97 ? (Math.sin(time * 60) > 0 ? 0.1 : 1) : 1;
-        k = (0.92 + 0.08 * n * b.flicker) * cut;
+        const flick = b.flicker + dr * 0.8;
+        const cut = flick > 0.5 && Math.sin(time * (0.9 + dr * 1.7) + b.seed) > 0.97 - dr * 0.06 ? (Math.sin(time * 60) > 0 ? 0.1 : 1) : 1;
+        k = (0.92 + 0.08 * n * flick) * cut * (1 - dr * 0.42);
       }
       b.level = k;
       b.light.intensity = b.base * k;
       if (b.bulb) b.bulb.material.color.setScalar(0.5 + k * 0.9);
+    }
+    if (this.boltT > 0) {
+      this.boltT -= dt;
+      const u = Math.max(0, this.boltT) / 0.42;
+      const flick = u > 0.75 ? 1 : u > 0.6 ? 0.15 : u > 0.45 ? 0.8 : u * 1.4;
+      this.bolt.intensity = 140 * flick;
+      if (this.boltT <= 0) this.bolt.intensity = 0;
     }
     if (this.flashT > 0) {
       this.flashT -= dt;

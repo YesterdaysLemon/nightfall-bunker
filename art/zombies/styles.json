@@ -24,6 +24,12 @@
     "prompt": "A zombie character model as it would appear in a 1997 console survival-horror game: about 400 faceted polygons, chunky blocky limbs, tiny blurry 64x64 pixel textures with nearest-neighbour pixelation, a painted-on face texture with pixel eyes and a pixel blood smear, stiff arms-forward pose, visible colour dithering, vertex-lit, low 320x240 resolution upscaled with crisp pixels, dark green fog background. Authentic retro 32-bit render, not modern."
   },
   {
+    "id": "ps1b",
+    "name": "Polygon Ghoul II",
+    "tagline": "32-bit, the period way",
+    "prompt": "Same concept as ps1 (see concepts/ps1.png); v2 repainted the way late-90s artists did it."
+  },
+  {
     "id": "ink",
     "name": "The Long Dead",
     "tagline": "Woodcut ink",

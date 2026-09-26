@@ -148,6 +148,14 @@ details summary { cursor: pointer; color: var(--ink-dim); padding: 0.3rem 0; }
 #center { position: absolute; left: 50%; top: 38%; transform: translateX(-50%); font-size: 2rem; text-align: center; opacity: 0; transition: opacity 0.5s; text-transform: uppercase; letter-spacing: 0.08em; }
 #center.show { opacity: 1; }
 #center small { display: block; font-family: var(--type); font-size: 1rem; color: var(--ink-dim); text-transform: none; letter-spacing: 0; }
+#center.dread { color: var(--blood-bright); font-size: 2.4rem; text-shadow: 0 0 18px rgba(226, 38, 28, 0.55), 0 2px 3px #000; }
+#center.gold { color: #ffcf6a; text-shadow: 0 0 16px rgba(255, 190, 80, 0.6), 0 2px 3px #000; }
+/* Boss health: a gold-seamed bar at the top centre. */
+#bossBar { position: absolute; left: 50%; top: calc(14px + var(--sat)); transform: translateX(-50%); width: min(460px, 60vw); text-align: center; }
+#bossBar .name { font-family: var(--stencil); font-size: 1.15rem; letter-spacing: 0.3em; color: #f3eee2; text-transform: uppercase; }
+#bossBar .bar { margin-top: 4px; height: 10px; border: 1px solid rgba(255, 207, 106, 0.7); background: rgba(10, 10, 12, 0.7); box-shadow: 0 0 12px rgba(255, 190, 80, 0.25); }
+#bossBar .bar i { display: block; height: 100%; width: 100%; background: linear-gradient(90deg, #f7f3ea, #e9e2d2 70%, #ffcf6a); transition: width 0.25s; }
+body.touch #bossBar { top: calc(8px + var(--sat)); width: min(340px, 44vw); }
 #netinfo { position: absolute; top: 10px; right: 12px; font-family: var(--type); font-size: 0.75rem; color: rgba(236, 230, 214, 0.5); }
 #chatlog { position: absolute; left: 16px; top: 38%; font-family: var(--type); font-size: 0.95rem; display: flex; flex-direction: column; gap: 2px; max-width: 40vw; }
 #chatlog div { animation: fadeout 9s forwards; }

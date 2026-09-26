@@ -1,13 +1,17 @@
 // Wire constants shared by clients, the browser-local sim and both servers.
 
-export const PROTOCOL = 1;
+export const PROTOCOL = 2;
 export const MAX_PLAYERS = 4;
 
-// Zombie states.
-export const ZS = { RISE: 0, WINDOW_WALK: 1, TEAR: 2, CLIMB: 3, CHASE: 4, ATTACK: 5 };
+// Enemy states. WARP: a hound materialising; SHATTER/REFORM: the porcelain boss
+// bursting apart and reassembling somewhere else.
+export const ZS = { RISE: 0, WINDOW_WALK: 1, TEAR: 2, CLIMB: 3, CHASE: 4, ATTACK: 5, WARP: 6, SHATTER: 7, REFORM: 8 };
+// Enemy classes (the snapshot's `cls` column).
+export const ZC = { WALKER: 0, JOGGER: 1, RUNNER: 2, HOUND: 3, KINTSUGI: 4 };
 // Player states.
 export const PS = { ALIVE: 0, DOWN: 1, DEAD: 2 };
 
+// Random drops. 'goldleaf' exists too but only the porcelain boss drops it.
 export const POWERUPS = ['maxammo', 'instakill', 'doublepoints', 'nuke', 'carpenter'];
 
 // Input flag bits.

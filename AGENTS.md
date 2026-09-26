@@ -40,6 +40,32 @@ Real WWII weapon names are fine; the wonder weapon is the original Arc Pistol.
 - `server/index.mjs` — VPS container: static `dist/`, `/healthz`, and an
   in-memory single-region copy of the `/net` API (dev + fallback origin).
 
+## Special rounds and secrets
+
+- **Hound rounds.** The first comes at round 5–7, then every 4–5 rounds. They
+  use a separate RNG stream (`houndRng`), so zombie randomness never shifts.
+  - Fog rolls in and the bulbs dim.
+  - Hounds warp in on a lightning strike on the target player's floor, in an
+    unlocked zone 4.5–10 m from a player, with at most 2 + 2 × players alive at
+    once.
+  - They bite for 25, die in a few shots, and burst into flame.
+  - The last hound always drops a Max Ammo, and random drops are off for the round.
+- **Kintsugi easter egg.** Break three gold-mended teacups (`EGG.cups` in
+  `map.js`): by the radio, on the loft desk, and on a courtyard post seen
+  through the east window. Then touch the glowing figurine on the help-room
+  cabinet.
+  - She is the porcelain boss (`ZC.KINTSUGI`): slow while any player looks at
+    her, fast when nobody does.
+  - She shatters and re-forms behind a player every 8–13 s, and at each 25%
+    health stage.
+  - She is invulnerable while shattered, immune to insta-kill and nukes, and
+    takes half splash damage.
+  - Killing her drops Gold Leaf: the Arc Pistol for the grabber, and +1000
+    points and full grenades for everyone.
+- Enemy classes and states live in `protocol.js` (`ZC`, `ZS`). Hounds use
+  `houndHitTest` (yaw-aware). Client renderers: `render/hounds.js`,
+  `render/kintsugi.js`, and `render/egg.js` for the props.
+
 ## Netcode decisions
 
 - Server-authoritative zombies, points, purchases and health at 20 Hz; clients
@@ -68,6 +94,12 @@ Real WWII weapon names are fine; the wonder weapon is the original Arc Pistol.
   app manifest + icons, canvas fits the visible height (dvh), touch controls.
   iPhone Safari cannot fullscreen a page; Add to Home Screen (manifest
   `display: fullscreen`) is the fullscreen path. `npm run icons` redraws icons.
+- `npm run hounds-smoke` — headless, muted: forces a hound round (fog,
+  lightning, hounds, the Max Ammo drop). Then it plays the Kintsugi easter egg
+  end to end: aimed shots break the three teacups, the figurine wakes her, and
+  she shatters, re-forms and dies, dropping the Gold Leaf. Screenshots go to
+  `output/hounds/`. It drives the in-page sim through `window.__game.conn.room.sim`
+  (`?test` only).
 - `npm run audio-check` — silent: renders the audio engine offline and asserts
   direction (HRTF), distance falloff, wall occlusion and moving zombie voices.
 - `node scripts/mp-smoke.mjs --url <site>` — two headless browsers create and

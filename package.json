@@ -20,7 +20,8 @@
     "audio-check": "node scripts/audio-check.mjs",
     "touch-smoke": "node scripts/touch-smoke.mjs",
     "ios-smoke": "node scripts/ios-smoke.mjs",
-    "icons": "node scripts/make-icons.mjs"
+    "icons": "node scripts/make-icons.mjs",
+    "hounds-smoke": "node scripts/hounds-smoke.mjs"
   },
   "dependencies": {
     "ws": "8.21.3"

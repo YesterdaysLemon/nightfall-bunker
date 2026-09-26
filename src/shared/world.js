@@ -196,7 +196,29 @@ export function zombieHitTest(ox, oy, oz, dx, dy, dz, zx, zy, zz, maxDist) {
   return part < 0 ? null : { t: best, part };
 }
 
-function raySphere(ox, oy, oz, dx, dy, dz, cx, cy, cz, r) {
+// Hound hit volumes: a skull sphere out front and three spheres along the body,
+// all following the hound's yaw (facing +Z rotated by yaw). Parts: 0 head, 1 body.
+export function houndHitTest(ox, oy, oz, dx, dy, dz, hx, hy, hz, yaw, maxDist) {
+  const fx = Math.sin(yaw), fz = Math.cos(yaw);
+  let best = maxDist, part = -1;
+  let t = raySphere(ox, oy, oz, dx, dy, dz, hx + fx * 0.6, hy + 0.62, hz + fz * 0.6, 0.16);
+  if (t >= 0 && t < best) { best = t; part = 0; }
+  for (const [f, y, r] of [[0.28, 0.55, 0.22], [-0.05, 0.52, 0.21], [-0.38, 0.5, 0.19]]) {
+    t = raySphere(ox, oy, oz, dx, dy, dz, hx + fx * f, hy + y, hz + fz * f, r);
+    if (t >= 0 && t < best) { best = t; part = 1; }
+  }
+  return part < 0 ? null : { t: best, part };
+}
+
+// Any enemy by class: hounds are quadrupeds, everything else is humanoid.
+export function enemyHitTest(cls, ox, oy, oz, dx, dy, dz, x, y, z, yaw, maxDist) {
+  return cls === 3
+    ? houndHitTest(ox, oy, oz, dx, dy, dz, x, y, z, yaw, maxDist)
+    : zombieHitTest(ox, oy, oz, dx, dy, dz, x, y, z, maxDist);
+}
+
+// Exported for small props (the easter-egg teacups).
+export function raySphere(ox, oy, oz, dx, dy, dz, cx, cy, cz, r) {
   const lx = ox - cx, ly = oy - cy, lz = oz - cz;
   const b = lx * dx + ly * dy + lz * dz;
   const c = lx * lx + ly * ly + lz * lz - r * r;

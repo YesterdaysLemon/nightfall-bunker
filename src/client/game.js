@@ -2,12 +2,14 @@
 // interaction and the network message handling.
 
 import * as THREE from 'three';
-import { World, zombieHitTest } from '../shared/world.js';
+import { World, enemyHitTest } from '../shared/world.js';
 import {
-  WINDOWS, DOORS, WALL_BUYS, MYSTERY_BOX, RADIO, LOFT_Y, MAX_BOARDS, PLAYER_SPAWNS,
+  WINDOWS, DOORS, WALL_BUYS, MYSTERY_BOX, RADIO, LOFT_Y, MAX_BOARDS, PLAYER_SPAWNS, EGG,
 } from '../shared/map.js';
 import { WEAPONS, WALL_PRICES, BOX_COST, BOX_POOL, START_WEAPON, KNIFE, GRENADE } from '../shared/weapons.js';
-import { PS, ZS, IN, PROTOCOL, PLAYER_COLORS, REGIONS } from '../shared/protocol.js';
+import { PS, ZS, ZC, IN, PROTOCOL, PLAYER_COLORS, REGIONS } from '../shared/protocol.js';
+import { EggProps } from './render/egg.js';
+import { buildTeacup } from './render/kintsugi.js';
 import { SceneRig } from './render/scene.js';
 import { createTextures } from './render/textures.js';
 import { Level } from './render/level.js';
@@ -23,7 +25,7 @@ import { AudioEngine } from './audio.js';
 const EYE = 1.62, CROUCH_EYE = 1.08, DOWN_EYE = 0.55;
 const WALK = 4.2, SPRINT = 6.3;
 const INPUT_RATE = 1 / 20;
-const POWERUP_NAMES = { maxammo: 'Max Ammo', instakill: 'Insta-Kill', doublepoints: 'Double Points', nuke: 'Kaboom', carpenter: 'Carpenter' };
+const POWERUP_NAMES = { maxammo: 'Max Ammo', instakill: 'Insta-Kill', doublepoints: 'Double Points', nuke: 'Kaboom', carpenter: 'Carpenter', goldleaf: 'Gold Leaf' };
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _dir = new THREE.Vector3(), _up = new THREE.Vector3();
 
@@ -42,6 +44,8 @@ export class Game {
     this.fx = new FX(this.rig, this.tex, this.world, this.audio);
     this.zombies = new Zombies(this.rig, this.tex, this.audio, this.fx);
     this.zombies.onSpawn = (z) => this.onZombieSpawn(z);
+    this.egg = new EggProps(this.rig, this.tex);
+    this.fx.goldModel = () => { const g = buildTeacup(); g.scale.setScalar(3.4); g.position.y = -0.15; return g; };
     this.avatars = new Avatars(this.rig.scene, this.tex);
     this.vm = new ViewModel(this.rig.renderer, this.rig.scene);
     this.hud = new HUD();
@@ -59,11 +63,17 @@ export class Game {
     requestAnimationFrame(this.loop);
   }
 
-  // Compile shaders once up front so the first zombie doesn't stutter.
+  // Compile shaders once up front so the first zombie (or hound, or her) doesn't stutter.
   warmup() {
     const r = this.rig.renderer;
     this.rig.camera.position.set(0, 1.6, 0);
+    const fake = (cls, state) => ({ id: -1, seed: 1, cls, x: 0, y: 0, z: -3, yaw: 0, speed: 0, phase: 0, state, stateT: 0.5, killed: false, deadT: 0, stage: 0, hpFrac: 1 });
+    const Z = this.zombies;
+    Z.hounds.begin(); Z.hounds.draw(fake(ZC.HOUND, ZS.CHASE), 0.016, 0); Z.hounds.end();
+    Z.boss.draw(fake(ZC.KINTSUGI, ZS.CHASE), 0.016, 0);
     r.compile(this.rig.scene, this.rig.camera);
+    Z.hounds.begin(); Z.hounds.end();
+    Z.boss.hide();
     for (const id of Object.keys(WEAPONS)) this.vm.model(id);
     r.compile(this.vm.scene, this.vm.camera);
   }
@@ -97,6 +107,12 @@ export class Game {
     this.target = null;
     this.over = null;
     this.snapRows = [];
+    this.eggStage = 'cups';
+    this.bossId = null;
+    this.bossMusic?.stop?.();
+    this.bossMusic = null;
+    if (this.zombies) this.zombies.bossInfo = { stage: 0, hpFrac: 1 };
+    this.rig?.setDread(false);
   }
 
   // 0..1: how much level geometry sits between the camera and a sound. Two rays (the source and
@@ -148,6 +164,7 @@ export class Game {
     this.level.resetBoards(this.boards);
     this.rebuildDoorVisuals();
     this.level.setBox('idle');
+    this.egg.reset(null);
   }
 
   rebuildDoorVisuals() {
@@ -158,6 +175,9 @@ export class Game {
 
   stop() {
     if (this.conn) { this.conn.close(); this.conn = null; }
+    this.bossMusic?.stop?.();
+    this.bossMusic = null;
+    this.rig.setDread(false);
     this.zombies.clear();
     this.avatars.clear();
     this.fx.clear();
@@ -193,6 +213,8 @@ export class Game {
     this.level.resetBoards(m.boards);
     if (m.box) { this.boxState = m.box; if (m.box.state !== 'idle') this.level.setBox(m.box.state, m.box.weapon, m.box.owner, Object.keys(BOX_POOL)); }
     for (const [id, type, x, y, z] of m.powerups) this.fx.spawnPowerup(id, type, x / 100, y / 100, z / 100);
+    if (m.egg) { this.eggStage = m.egg.stage; this.egg.reset(m.egg); }
+    this.rig.setDread(!!m.hounds);
     const me = m.me;
     if (me) {
       Object.assign(this.p, { x: me.x, y: me.y, z: me.z, yaw: me.yaw, points: me.points, grenades: me.grenades, state: me.state, hp: me.hp });
@@ -249,6 +271,19 @@ export class Game {
     this.phase = m.ph;
     this.phaseT = m.pt;
     this.insta = m.ik; this.dbl = m.dp;
+    if (m.hr !== undefined && !!m.hr !== (this.rig.dreadTarget > 0)) this.rig.setDread(!!m.hr);
+    if (m.kb) {
+      const [id, hp, stage] = m.kb;
+      this.bossId = id;
+      this.zombies.bossInfo = { stage, hpFrac: hp / 1000 };
+      this.hud.boss(hp / 1000);
+      if (!this.bossMusic && this.phase !== 'over') this.bossMusic = this.audio.bossMusic?.() || null;
+    } else if (this.bossId !== null) {
+      this.bossId = null;
+      this.hud.boss(null);
+      this.bossMusic?.stop?.();
+      this.bossMusic = null;
+    }
   }
 
   setMyState(s) {
@@ -328,9 +363,84 @@ export class Game {
         this.hud.setRound(e[1], true);
         this.audio.roundStart(e[1]);
         break;
-      case 'rend': this.audio.roundEnd(e[1]); break;
-      case 'zatk': { const z = this.zombies.get(e[1]); if (z) z.voice = this.audio.zombieAttack({ x: z.x, y: z.y + 1.5, z: z.z }, z.seed); break; }
-      case 'zspawn': break;
+      case 'rend':
+        if (e[2]) { this.rig.setDread(false); (this.audio.houndRoundEnd || this.audio.roundEnd).call(this.audio, e[1]); }
+        else this.audio.roundEnd(e[1]);
+        break;
+      case 'hounds':
+        this.rig.setDread(true);
+        this.audio.houndRoundStart?.();
+        this.hud.center('The hounds are loose', 'Back to a wall. Watch each other.', 3600, 'dread');
+        this.shake = Math.max(this.shake, 0.2);
+        break;
+      case 'strike': {
+        const x = e[1] / 100, y = e[2] / 100, z = e[3] / 100;
+        this.fx.lightning(x, y, z);
+        this.audio.lightning?.({ x, y: y + 1, z });
+        const d = Math.hypot(x - this.p.x, z - this.p.z);
+        this.shake = Math.max(this.shake, Math.max(0, 1 - d / 12) * 0.35);
+        break;
+      }
+      case 'zatk': {
+        const z = this.zombies.get(e[1]);
+        if (!z) break;
+        if (z.cls === ZC.HOUND) z.voice = z.state === ZS.WARP ? this.audio.houndBark?.({ x: z.x, y: z.y + 0.6, z: z.z }, z.seed) : this.audio.houndBite?.({ x: z.x, y: z.y + 0.6, z: z.z });
+        else if (z.cls === ZC.KINTSUGI) this.audio.bossAttack?.({ x: z.x, y: z.y + 1.5, z: z.z });
+        else z.voice = this.audio.zombieAttack({ x: z.x, y: z.y + 1.5, z: z.z }, z.seed);
+        break;
+      }
+      case 'zspawn':
+        if (e[2] === ZC.KINTSUGI) {
+          this.hud.center('Kintsugi', 'Broken things were mended with gold', 4200, 'gold');
+          if (!this.bossMusic) this.bossMusic = this.audio.bossMusic?.() || null;
+        }
+        break;
+      case 'cup': {
+        const pos = this.egg.breakCup(e[1]);
+        if (pos) {
+          this.fx.porcelain(pos[0], pos[1] + 0.06, pos[2], 0.25, 0.35);
+          this.audio.teacupBreak?.({ x: pos[0], y: pos[1], z: pos[2] }, e[1]);
+        }
+        break;
+      }
+      case 'egg': {
+        const f = EGG.figurine.pos;
+        const fp = { x: f[0], y: f[1] + 0.15, z: f[2] };
+        if (e[1] === 'ready') {
+          this.eggStage = 'ready';
+          this.egg.setStage('ready');
+          this.audio.figurineChime?.(fp);
+          this.chimeT = 2.7;
+        } else if (e[1] === 'wake') {
+          this.eggStage = 'awake';
+          this.egg.setStage('awake');
+          this.fx.porcelain(fp.x, fp.y, fp.z, 0.5, 0.5);
+          this.audio.figurineWake?.(fp);
+          this.hud.center('Something stirs…', '', 3000, 'gold');
+          this.flashWhite = Math.max(this.flashWhite || 0, 0.25);
+        }
+        break;
+      }
+      case 'kshatter': {
+        const x = e[2] / 100, y = e[3] / 100, z = e[4] / 100;
+        this.fx.porcelain(x, y + 1.0, z, 1.2, 1.3);
+        this.audio.bossShatter?.({ x, y: y + 1, z });
+        break;
+      }
+      case 'kreform': {
+        const x = e[2] / 100, y = e[3] / 100, z = e[4] / 100;
+        this.fx.reform(x, y, z);
+        this.audio.bossReform?.({ x, y: y + 1, z });
+        break;
+      }
+      case 'kstage': {
+        const z = this.zombies.get(e[1]);
+        if (z) {
+          this.fx.porcelain(z.x, z.y + 1.4, z.z, 0.6, 0.8);
+          this.audio.bossScream?.({ x: z.x, y: z.y + 1.6, z: z.z });
+        }
+        break;
+      }
       case 'chat': { const pl = this.players.get(e[1]); if (pl) this.hud.chat(pl.name, e[2], PLAYER_COLORS[pl.slot % 4]); break; }
       case 'radio': this.radio?.stop?.(); this.radio = this.audio.radioSong({ x: RADIO.pos[0], y: RADIO.pos[1], z: RADIO.pos[2] }); break;
       case 'over': this.onOver(e[1], e[2]); break;
@@ -351,6 +461,24 @@ export class Game {
     const z = this.zombies.kill(zid, kind, ang / 100);
     const x = x100 / 100, y = y100 / 100, zz = z100 / 100;
     const dx = Math.sin(ang / 100), dz = Math.cos(ang / 100);
+    if (z?.cls === ZC.HOUND) {
+      this.fx.houndBurst(x, y, zz);
+      this.audio.houndDeath?.({ x, y: y + 0.6, z: zz }, z.seed);
+      if (kind === 1 && by === this.me) this.audio.headshot({ x, y: y + 0.6, z: zz });
+      return;
+    }
+    if (z?.cls === ZC.KINTSUGI) {
+      this.fx.porcelain(x, y + 1.0, zz, 2.5, 1.6);
+      this.audio.bossDeath?.({ x, y: y + 1, z: zz });
+      this.bossMusic?.stop?.();
+      this.bossMusic = null;
+      this.bossId = null;
+      this.hud.boss(null);
+      this.eggStage = 'done';
+      this.hud.center('Kintsugi is broken', 'Something golden fell where she stood', 4500, 'gold');
+      this.shake = Math.max(this.shake, 0.5);
+      return;
+    }
     if (kind === 1) {
       this.fx.blood(x, y + 1.65, zz, dx * 0.5, 0.6, dz * 0.5, 2.5);
       if (by === this.me) this.audio.headshot({ x, y: y + 1.6, z: zz });
@@ -407,7 +535,8 @@ export class Game {
 
   onPowerup(id, type, pid) {
     this.fx.removePowerup(id);
-    this.audio.powerupGrab(type);
+    if (type === 'goldleaf' && this.audio.goldLeaf) this.audio.goldLeaf();
+    else this.audio.powerupGrab(type);
     if (!this.muted) this.audio.announce(POWERUP_NAMES[type] || type);
     this.hud.center(POWERUP_NAMES[type] || type, '', 1800);
     if (type === 'maxammo') {
@@ -431,6 +560,9 @@ export class Game {
 
   onOver(round, stats) {
     this.over = { round, stats };
+    this.bossMusic?.stop?.();
+    this.bossMusic = null;
+    this.hud.boss(null);
     this.audio.gameOver();
     this.hud.center('Game over', `You survived ${round} round${round === 1 ? '' : 's'}`, 6000);
     setTimeout(() => { if (this.over) this.onEvent({ type: 'over', over: this.over }); }, 3500);
@@ -614,19 +746,28 @@ export class Game {
       const ux = dx / len, uy = dy / len, uz = dz / len;
       const wallT = this.world.raycast(o.x, o.y, o.z, ux, uy, uz, W.range, n);
       const zh = [];
-      this.zombies.forEachTarget((id, zx, zy, zz) => {
+      this.zombies.forEachTarget((id, zx, zy, zz, st, cls, yaw) => {
         if (Math.abs(zx - o.x) > W.range || Math.abs(zz - o.z) > W.range) return;
-        const h = zombieHitTest(o.x, o.y, o.z, ux, uy, uz, zx, zy, zz, wallT);
+        const h = enemyHitTest(cls, o.x, o.y, o.z, ux, uy, uz, zx, zy, zz, yaw, wallT);
         if (h) zh.push([h.t, id, h.part]);
       });
       zh.sort((q, r2) => q[0] - r2[0]);
+      // A teacup in the line of fire (only the first pellet can claim one).
+      if (k === 0 && this.eggStage === 'cups') {
+        const cup = this.egg.hitTest(o.x, o.y, o.z, ux, uy, uz, Math.min(wallT, zh.length ? zh[0][0] : Infinity));
+        if (cup >= 0) this.conn.send({ t: 'cup', i: cup, o: [o.x, o.y, o.z], d: [ux, uy, uz] });
+      }
       const maxPen = 1 + (W.penetrate || 0);
       let endT = wallT;
       for (let i = 0; i < Math.min(maxPen, zh.length); i++) {
         const [t, id, part] = zh[i];
         hits.push([id, part]);
-        this.fx.blood(o.x + ux * t, o.y + uy * t, o.z + uz * t, ux, uy, uz, part === 0 ? 1.4 : 0.8);
-        this.audio.impactFlesh({ x: o.x + ux * t, y: o.y + uy * t, z: o.z + uz * t });
+        const hx = o.x + ux * t, hy = o.y + uy * t, hz = o.z + uz * t;
+        const hitCls = this.zombies.get(id)?.cls;
+        if (hitCls === ZC.KINTSUGI) this.fx.porcelain(hx, hy, hz, 0.12, 0.25);
+        else if (hitCls === ZC.HOUND) { this.fx.blood(hx, hy, hz, ux, uy, uz, 0.5); this.fx.add.emit(hx, hy, hz, ux, 1, uz, 1, 0.5, 0.1, 1, 0.08, 0.3, 2, 1); }
+        else this.fx.blood(hx, hy, hz, ux, uy, uz, part === 0 ? 1.4 : 0.8);
+        this.audio.impactFlesh({ x: hx, y: hy, z: hz });
         if (i === maxPen - 1) endT = t;
       }
       if (zh.length < maxPen && wallT < W.range) this.fx.impact(o.x + ux * wallT, o.y + uy * wallT, o.z + uz * wallT, n[0], n[1], n[2]);
@@ -650,7 +791,7 @@ export class Game {
     this.zombies.forEachTarget((id, zx, zy, zz, st) => {
       const dx = zx - p.x, dz = zz - p.z;
       const d = Math.hypot(dx, dz);
-      if (d > bd || Math.abs(zy - p.y) > 1.3 || st === ZS.RISE) return;
+      if (d > bd || Math.abs(zy - p.y) > 1.3 || st === ZS.RISE || st === ZS.WARP) return;
       const dot = (dx * _dir.x + dz * _dir.z) / (d * Math.hypot(_dir.x, _dir.z) || 1);
       if (dot < 0.55 && d > 0.6) return;
       best = { id, zx, zy, zz }; bd = d;
@@ -715,6 +856,11 @@ export class Game {
       if (near(w.repair[0], w.repair[1], w.repair[2], 1.3)) return { kind: 'repair', hold: true, label: 'Hold <b>F</b> to rebuild the barrier', short: 'Hold to rebuild' };
     }
     if (near(RADIO.pos[0], 0, RADIO.pos[2], 1.6)) return { kind: 'radio', label: '', short: 'Radio' };
+    // The figurine only answers once all three teacups are broken.
+    if (this.eggStage === 'ready') {
+      const f = EGG.figurine.pos;
+      if (near(f[0], 0, f[2], 2.0)) return { kind: 'egg', label: 'Press <b>F</b> to touch the figurine', short: 'Touch the figurine' };
+    }
     return null;
   }
 
@@ -727,6 +873,7 @@ export class Game {
     this.touch?.setUse(this.canAct() ? t : null);
     if (t && this.canAct() && this.input.hit('KeyF') && !t.hold) {
       if (t.kind === 'radio') this.conn.send({ t: 'radio' });
+      else if (t.kind === 'egg') this.conn.send({ t: 'egg' });
       else if (t.kind === 'box') this.conn.send({ t: 'buy', k: 'box' });
       else if (t.kind === 'boxTake') this.conn.send({ t: 'buy', k: 'boxTake' });
       else this.conn.send({ t: 'buy', k: t.kind, id: t.id });
@@ -746,14 +893,14 @@ export class Game {
     const o = cam.position;
     const CONE = 0.13;
     let best = null, bestAng = CONE;
-    this.zombies.forEachTarget((id, zx, zy, zz, st) => {
+    this.zombies.forEachTarget((id, zx, zy, zz, st, cls) => {
       if (st === ZS.RISE) return;
-      const vx = zx - o.x, vy = zy + 1.35 - o.y, vz = zz - o.z;
+      const vx = zx - o.x, vy = zy + (cls === ZC.HOUND ? 0.55 : 1.35) - o.y, vz = zz - o.z;
       const d = Math.hypot(vx, vy, vz);
       if (d > 28 || d < 0.5) return;
       const ang = Math.acos(Math.max(-1, Math.min(1, (vx * _dir.x + vy * _dir.y + vz * _dir.z) / d)));
       if (ang >= bestAng) return;
-      if (!this.world.lineOfSight(o.x, o.y, o.z, zx, zy + 1.35, zz)) return;
+      if (!this.world.lineOfSight(o.x, o.y, o.z, zx, zy + (cls === ZC.HOUND ? 0.55 : 1.35), zz)) return;
       bestAng = ang;
       best = { vx, vy, vz };
     });
@@ -777,9 +924,9 @@ export class Game {
     const range = Math.min(W.range, 35);
     const wall = this.world.raycast(o.x, o.y, o.z, _dir.x, _dir.y, _dir.z, range);
     let hit = false;
-    this.zombies.forEachTarget((id, zx, zy, zz, st) => {
+    this.zombies.forEachTarget((id, zx, zy, zz, st, cls, yaw) => {
       if (hit || st === ZS.RISE) return;
-      if (zombieHitTest(o.x, o.y, o.z, _dir.x, _dir.y, _dir.z, zx, zy, zz, wall)) hit = true;
+      if (enemyHitTest(cls, o.x, o.y, o.z, _dir.x, _dir.y, _dir.z, zx, zy, zz, yaw, wall)) hit = true;
     });
     return hit;
   }
@@ -913,6 +1060,7 @@ export class Game {
     else this.attract(dt);
     this.rig.update(dt, this.time);
     this.level.update(dt);
+    this.egg.update(dt);
     this.exterior.update(dt);
     this.zombies.update(dt, now, this.rig.camera.position);
     this.avatars.update(dt, now, this.zombies.interpDelay);
@@ -958,6 +1106,23 @@ export class Game {
       this.hud.netinfo('');
     }
     if (this.flashWhite > 0) this.flashWhite = Math.max(0, this.flashWhite - dt * 1.5);
+    // Unbroken teacups catch the light now and then: a faint gold glint to find them by.
+    if (this.eggStage === 'cups' && Math.random() < dt * 0.9) {
+      const i = Math.floor(Math.random() * EGG.cups.length);
+      if (!this.egg.cups[i].broken) {
+        const c = EGG.cups[i].pos;
+        this.fx.add.emit(c[0] + (Math.random() - 0.5) * 0.06, c[1] + 0.07, c[2] + (Math.random() - 0.5) * 0.06, 0, 0.05, 0, 1, 0.82, 0.4, 1, 0.05, 0.35, 0, 0, 1.5);
+      }
+    }
+    // The primed figurine keeps chiming for anyone close enough to hear it.
+    if (this.eggStage === 'ready') {
+      this.chimeT = (this.chimeT ?? 0) - dt;
+      const f = EGG.figurine.pos;
+      if (this.chimeT <= 0 && Math.hypot(p.x - f[0], p.z - f[2]) < 16) {
+        this.chimeT = 2.7;
+        this.audio.figurineChime?.({ x: f[0], y: f[1] + 0.15, z: f[2] });
+      }
+    }
   }
 
   attract(dt) {

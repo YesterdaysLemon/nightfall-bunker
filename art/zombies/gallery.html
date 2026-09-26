@@ -54,8 +54,8 @@
   @media (max-width: 560px) { header { grid-template-columns: 1fr; } .tally { width: 110px; height: 62px; } }
 
   /* ---- lineup */
-  .lineup { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; padding-block: 1.6rem; }
-  @media (max-width: 900px) { .lineup { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  .lineup { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; padding-block: 1.6rem; }
+  @media (max-width: 900px) { .lineup { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
   @media (max-width: 480px) { .lineup { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   .suspect { display: grid; gap: 6px; text-decoration: none; color: inherit; position: relative; }
   .suspect .shot { position: relative; aspect-ratio: 3 / 4; overflow: hidden; background: var(--panel); border: 1px solid var(--line); }
@@ -145,7 +145,7 @@
   <header>
     <div>
       <h1>Zombie <span>Lineup</span></h1>
-      <p id="intro">Six directions for Nightfall Bunker's undead, each modelled in Blender from code and staged in its own light. Spin them, hold them against their concept sheets, and mark what to keep. Your picks and notes save to this page for the next round of design.</p>
+      <p id="intro">Six directions for Nightfall Bunker's undead, plus a second pass at the favourite, each modelled in Blender from code and staged in its own light. Spin them, hold them against their concept sheets, and mark what to keep. Your picks and notes save to this page for the next round of design.</p>
     </div>
     <svg class="tally" viewBox="0 0 150 84" role="img" aria-label="Six chalk tally marks">
       <defs><filter id="chalk" x="-10%" y="-10%" width="120%" height="120%"><feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="2" seed="3"/><feDisplacementMap in="SourceGraphic" scale="3.2"/></filter></defs>
@@ -201,7 +201,7 @@
   };
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const fmt = (n) => (n == null ? '–' : Number(n).toLocaleString('en-US'));
-  const VIEWS = [['three_quarter', '3/4'], ['front', 'Front'], ['side', 'Side'], ['back', 'Back'], ['spin', 'Spin 360°']];
+  const VIEWS = [['three_quarter', '3/4'], ['front', 'Front'], ['side', 'Side'], ['back', 'Back'], ['spin', 'Spin 360°'], ['ingame', 'In game']];
   const TECH = [['skin', 'Skin modifier'], ['sculpt', 'Sculpted by code'], ['cloth', 'Cloth sim'], ['softbody', 'Soft body'], ['other', null]];
   const state = { picks: {}, mix: {} };
   const badges = {};
@@ -226,7 +226,8 @@
       'aria-valuemin': '0', 'aria-valuemax': '23', 'aria-valuenow': '2' });
     const hint = el('span', { class: 'hint', hidden: true, text: 'Drag or use arrow keys to turn' });
     stage.append(img, spin, hint);
-    const buttons = VIEWS.map(([v, label]) => el('button', { type: 'button', 'aria-pressed': v === 'three_quarter' ? 'true' : 'false', text: label,
+    const views = VIEWS.filter(([v]) => s.img[v]);
+    const buttons = views.map(([v, label]) => el('button', { type: 'button', 'aria-pressed': v === 'three_quarter' ? 'true' : 'false', text: label,
       onclick: () => show(v) }));
     let frame = 2, auto = null, drag = null;
     const setFrame = (f) => {
@@ -236,7 +237,7 @@
     };
     const stopAuto = () => { if (auto) { clearInterval(auto); auto = null; } };
     function show(v) {
-      buttons.forEach((b, k) => b.setAttribute('aria-pressed', String(VIEWS[k][0] === v)));
+      buttons.forEach((b, k) => b.setAttribute('aria-pressed', String(views[k][0] === v)));
       stopAuto();
       if (v === 'spin') {
         if (!spin.style.backgroundImage) spin.style.backgroundImage = `url("${s.img.spin}")`;
@@ -246,6 +247,7 @@
       } else {
         spin.hidden = true; hint.hidden = true; img.hidden = false;
         img.src = s.img[v];
+        img.style.objectFit = v === 'ingame' ? 'contain' : 'cover';
         img.alt = `${s.name}, ${v.replace('_', '-')} view`;
       }
     }

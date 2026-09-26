@@ -168,3 +168,158 @@ test('a thrown grenade explodes and kills a nearby zombie', () => {
   assert.ok(!sim.zombies.has(99), 'zombie killed by the blast');
   assert.ok(p.points > 500, 'owner got points');
 });
+
+// --- Hound rounds -------------------------------------------------------------------------
+import { houndCount, houndHealth, bossHealth } from '../src/shared/sim.js';
+import { EGG } from '../src/shared/map.js';
+import { ZC } from '../src/shared/protocol.js';
+import { houndHitTest, enemyHitTest } from '../src/shared/world.js';
+
+function runUntil(sim, pred, maxTicks = 4000, perTick = () => {}) {
+  const seen = [];
+  for (let i = 0; i < maxTicks && !pred(seen); i++) {
+    perTick();
+    sim.step();
+    seen.push(...sim.drainEvents());
+  }
+  return seen;
+}
+
+test('hound hitboxes follow the hound yaw', () => {
+  // Facing +x (yaw = pi/2): the head is ~0.6 m toward +x at 0.62 m up.
+  const head = houndHitTest(0.6, 0.62, 5, 0, 0, -1, 0, 0, 0, Math.PI / 2, 50);
+  assert.equal(head.part, 0);
+  const body = houndHitTest(-0.3, 0.5, 5, 0, 0, -1, 0, 0, 0, Math.PI / 2, 50);
+  assert.equal(body.part, 1);
+  assert.equal(houndHitTest(0, 1.6, 5, 0, 0, -1, 0, 0, 0, 0, 50), null, 'a hound is not head-high');
+  assert.ok(enemyHitTest(ZC.WALKER, 0, 1.63, 5, 0, 0, -1, 0, 0, 0, 0, 50), 'zombies keep humanoid boxes');
+});
+
+test('hound rounds: scheduled, spawn inside near players, last hound drops max ammo', () => {
+  assert.ok(houndCount(6, 1) >= 8 && houndCount(6, 4) > houndCount(6, 1));
+  assert.ok(houndHealth(6) < 650 && houndHealth(1) >= 150);
+  const sim = new GameSim({ seed: 42, firstHoundRound: 1 });
+  const p = sim.addPlayer('p', 'P');
+  const seen = runUntil(sim, (ev) => ev.some((e) => e[0] === 'strike'), 400);
+  assert.ok(seen.some((e) => e[0] === 'hounds' && e[1] === 1), 'round 1 announced as a hound round');
+  assert.ok(sim.houndRound);
+  const hounds = [...sim.zombies.values()].filter((z) => z.cls === ZC.HOUND);
+  assert.ok(hounds.length >= 1, 'a hound spawned');
+  for (const h of hounds) {
+    assert.ok(h.x > -6 && h.x < 8 && h.z > -6 && h.z < 6, `hound inside the start room at ${h.x.toFixed(1)},${h.z.toFixed(1)}`);
+    const d = Math.hypot(h.x - p.x, h.z - p.z);
+    assert.ok(d > 3 && d < 16, `spawned ${d.toFixed(1)} m away`);
+    assert.equal(h.state, ZS.WARP);
+  }
+  // Kill every hound as it arrives until the pack is gone.
+  const all = runUntil(sim, () => sim.phase === 'break', 6000, () => {
+    for (const z of [...sim.zombies.values()]) if (z.state !== ZS.WARP) sim.killZombie(z, 'p', 'head', [0, 0, 1]);
+  });
+  assert.equal(sim.phase, 'break');
+  assert.ok(all.some((e) => e[0] === 'rend' && e[2] === 1), 'round end flagged as a hound round');
+  const drops = all.filter((e) => e[0] === 'pu');
+  assert.equal(drops.length, 1, 'exactly one drop');
+  assert.equal(drops[0][2], 'maxammo');
+  assert.equal(sim.houndRound, false);
+  assert.ok(sim.nextHoundRound >= 5 && sim.nextHoundRound <= 6, `next hound round ${sim.nextHoundRound}`);
+});
+
+test('hounds chase and bite a player who stands still', () => {
+  const sim = new GameSim({ seed: 5, firstHoundRound: 1 });
+  sim.addPlayer('p', 'P');
+  const seen = runUntil(sim, (ev) => ev.some((e) => e[0] === 'hurt'), 2400, () => sim.handle('p', { t: 'in', x: -1.5, y: 0, z: 1.5, yaw: 0, pitch: 0, f: 0 }));
+  assert.ok(seen.some((e) => e[0] === 'hurt'), 'a hound reached and bit the player');
+});
+
+// --- The Kintsugi easter egg -------------------------------------------------------------------
+function shootCup(sim, pid, i) {
+  const p = sim.players.get(pid);
+  const c = EGG.cups[i];
+  const o = [p.x, p.y + 1.5, p.z];
+  const d = [c.pos[0] - o[0], c.pos[1] + 0.05 - o[1], c.pos[2] - o[2]];
+  sim.handle(pid, { t: 'cup', i, o, d });
+}
+
+test('easter egg: cups need a real line of sight, then the figurine wakes her', () => {
+  const sim = new GameSim({ seed: 9 });
+  const p = sim.addPlayer('p', 'P');
+  sim.openDoor('helpDoor'); sim.openDoor('debrisA');
+  // A shot from the far side of the help-room wall does not count.
+  Object.assign(p, { x: -12, y: 0, z: 0 });
+  shootCup(sim, 'p', 0);
+  assert.equal(sim.egg.cups[0], false, 'no shooting through walls');
+  // From the start room it does.
+  Object.assign(p, { x: 4, y: 0, z: -3 });
+  shootCup(sim, 'p', 0);
+  assert.equal(sim.egg.cups[0], true);
+  // Outside cup through the east window; loft cup from the loft.
+  Object.assign(p, { x: 6.8, y: 0, z: -1 });
+  shootCup(sim, 'p', 2);
+  assert.equal(sim.egg.cups[2], true, 'courtyard cup is visible through the east window');
+  Object.assign(p, { x: -2, y: LOFT_Y, z: -2 });
+  shootCup(sim, 'p', 1);
+  assert.equal(sim.egg.stage, 'ready');
+  // Touching the figurine from across the room does nothing; next to it wakes her.
+  Object.assign(p, { x: -8, y: 0, z: 0 });
+  sim.handle('p', { t: 'egg' });
+  assert.equal(sim.egg.stage, 'ready');
+  Object.assign(p, { x: -14.3, y: 0, z: 4.6 });
+  sim.handle('p', { t: 'egg' });
+  assert.equal(sim.egg.stage, 'awake');
+  runUntil(sim, () => !!sim.boss, 200);
+  assert.ok(sim.boss, 'boss spawned');
+  assert.equal(sim.boss.cls, ZC.KINTSUGI);
+  assert.equal(sim.boss.hp, bossHealth(sim.round, 1));
+});
+
+test('boss: slow when watched, fast when not, immune while shattered, drops gold leaf', () => {
+  const sim = new GameSim({ seed: 21 });
+  const p = sim.addPlayer('p', 'P');
+  sim.openDoor('helpDoor');
+  sim.phase = 'round'; sim.toSpawn = 0;
+  sim.spawnBoss();
+  const k = sim.boss;
+  k.state = ZS.CHASE;
+  // Stand in the start room doorway looking straight at her, then turn around.
+  Object.assign(p, { x: -4, y: 0, z: -0.2 });
+  const look = (away) => {
+    const yaw = Math.atan2(-(k.x - p.x), -(k.z - p.z)) + (away ? Math.PI : 0);
+    sim.handle('p', { t: 'in', x: p.x, y: 0, z: p.z, yaw, pitch: -0.05, f: 0 });
+  };
+  look(false); sim.step();
+  assert.equal(k.watched, true, 'seen while looked at');
+  assert.ok(k.speed < 2);
+  look(true); sim.step();
+  assert.equal(k.watched, false);
+  assert.ok(k.speed > 4);
+  // Big damage breaks a stage and makes her shatter; shattered she takes no damage.
+  sim.damageZombie(k, k.maxHp * 0.3, p, 'body', [0, 0, 1]);
+  assert.equal(k.stage, 1);
+  assert.equal(k.state, ZS.SHATTER);
+  const hp = k.hp;
+  sim.damageZombie(k, 500, p, 'body', [0, 0, 1]);
+  assert.equal(k.hp, hp, 'invulnerable while shattered');
+  // She re-forms behind the player.
+  runUntil(sim, () => k.state !== ZS.SHATTER, 60, () => look(false));
+  assert.equal(k.state, ZS.REFORM);
+  assert.ok(Math.hypot(k.x - p.x, k.z - p.z) < 2.6, 're-formed next to the player');
+  // Insta-kill and nukes don't work on her.
+  sim.insta = 30;
+  k.state = ZS.CHASE;
+  sim.damageZombie(k, 10, p, 'body', [0, 0, 1]);
+  assert.ok(k.hp > 0);
+  sim.applyPowerup({ id: 1, type: 'nuke' }, p);
+  assert.ok(sim.zombies.has(k.id), 'nuke spares the boss');
+  // Finish her: gold leaf drops, grabbing it gives the Arc Pistol.
+  const events = [];
+  sim.insta = 0;
+  k.state = ZS.CHASE;
+  sim.damageZombie(k, k.hp + 1, p, 'head', [0, 0, 1]);
+  events.push(...sim.drainEvents());
+  assert.equal(sim.egg.stage, 'done');
+  const pu = sim.powerups.find((u) => u.type === 'goldleaf');
+  assert.ok(pu, 'gold leaf dropped');
+  Object.assign(p, { x: pu.x, y: pu.y, z: pu.z });
+  sim.step();
+  assert.ok(p.weapons.includes('arcpistol'), 'Arc Pistol granted');
+});

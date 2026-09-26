@@ -209,6 +209,20 @@ export class FX {
       this.scene.add(s);
       return { s, t: 0 };
     });
+    this.goldGlowMat = new THREE.SpriteMaterial({ map: glow, color: 0xffc34a, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0.7 });
+    this.goldModel = null; // set by the game: () => THREE.Object3D for the gold-leaf pickup
+    // Lightning bolts (pool of 3 line strips) and queued hellfire patches.
+    const boltMat = new THREE.LineBasicMaterial({ color: 0xdfe9ff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false });
+    this.bolts = Array.from({ length: 3 }, () => {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6 * 32), 3).setUsage(THREE.DynamicDrawUsage));
+      const line = new THREE.LineSegments(g, boltMat);
+      line.frustumCulled = false;
+      line.visible = false;
+      this.scene.add(line);
+      return { line, life: 0 };
+    });
+    this.fires = [];
   }
 
   // --- Impacts -----------------------------------------------------------------------
@@ -341,17 +355,103 @@ export class FX {
     this.projectiles.delete(id);
   }
 
+  // --- Hounds & porcelain ----------------------------------------------------------------
+  // A jagged bolt from the sky to (x, y, z), a ground flash, sparks and a
+  // lingering ring of hellfire where the hound will stand up.
+  lightning(x, y, z) {
+    const b = this.bolts.find((q) => q.life <= 0) || this.bolts[0];
+    const pts = [];
+    let px = x + (Math.random() - 0.5) * 3, py = y + 16, pz = z + (Math.random() - 0.5) * 3;
+    const n = 14;
+    for (let i = 1; i <= n; i++) {
+      const u = i / n;
+      const nx = x + (px - x) * 0.25 * (1 - u) + (Math.random() - 0.5) * 0.9 * (1 - u * 0.8);
+      const ny = y + 16 * (1 - u);
+      const nz = z + (pz - z) * 0.25 * (1 - u) + (Math.random() - 0.5) * 0.9 * (1 - u * 0.8);
+      pts.push(px, py, pz, nx, ny, nz);
+      if (i > 3 && i < n - 2 && Math.random() < 0.35) {
+        pts.push(nx, ny, nz, nx + (Math.random() - 0.5) * 2.2, ny - 1 - Math.random() * 1.5, nz + (Math.random() - 0.5) * 2.2);
+      }
+      px = nx; py = ny; pz = nz;
+    }
+    const pos = b.line.geometry.attributes.position;
+    pos.array.fill(0);
+    pos.array.set(pts.slice(0, pos.array.length));
+    pos.needsUpdate = true;
+    b.line.geometry.setDrawRange(0, Math.min(pts.length, pos.array.length) / 3);
+    b.line.visible = true;
+    b.life = 0.32;
+    for (let i = 0; i < 40; i++) {
+      const v = randDir(3 + Math.random() * 5);
+      this.add.emit(x, y + 0.1, z, v[0], Math.abs(v[1]) + 1, v[2], 0.75, 0.85, 1, 1, 0.04, 0.3 + Math.random() * 0.4, 10, 1);
+    }
+    this.add.emit(x, y + 0.3, z, 0, 0, 0, 0.7, 0.8, 1, 1, 2.2, 0.16, 0, 0, 4);
+    this.houndFire(x, y, z, 0.9);
+    this.scorch.add(x, y + 0.015, z, 0, 1, 0, 1.4);
+    this.rig.lightning(new THREE.Vector3(x, y, z));
+  }
+
+  // Hellfire licking up from the ground for `dur` seconds (queued, drained in update).
+  houndFire(x, y, z, dur = 0.8) {
+    this.fires.push({ x, y, z, t: dur });
+  }
+
+  // A hound bursting into flame as it dies.
+  houndBurst(x, y, z) {
+    for (let i = 0; i < 34; i++) {
+      const v = randDir(1.5 + Math.random() * 3);
+      this.add.emit(x, y + 0.5, z, v[0], Math.abs(v[1]) * 1.2 + 0.8, v[2], 1, 0.4 + Math.random() * 0.3, 0.08, 1, 0.22 + Math.random() * 0.25, 0.35 + Math.random() * 0.35, -0.6, 2.2, 1.2);
+    }
+    for (let i = 0; i < 14; i++) {
+      const v = randDir(0.8);
+      this.alpha.emit(x, y + 0.6, z, v[0], Math.abs(v[1]) + 0.9, v[2], 0.07, 0.06, 0.05, 0.75, 0.45 + Math.random() * 0.3, 1.6 + Math.random(), -0.2, 1, 0.9);
+    }
+    for (let i = 0; i < 16; i++) {
+      const v = randDir(3 + Math.random() * 3);
+      this.add.emit(x, y + 0.5, z, v[0], Math.abs(v[1]) + 2, v[2], 1, 0.6, 0.2, 1, 0.035, 0.8 + Math.random() * 0.8, 9, 0.4);
+    }
+    this.scorch.add(x, y + 0.015, z, 0, 1, 0, 1.1);
+    this.rig.explosionFlash(new THREE.Vector3(x, y + 0.6, z));
+  }
+
+  // Glazed shards (white with blue flecks) and gold dust. `n` scales the burst.
+  porcelain(x, y, z, n = 1, spread = 1) {
+    for (let i = 0; i < 34 * n; i++) {
+      const v = randDir((2 + Math.random() * 4) * spread);
+      const blue = Math.random() < 0.18;
+      this.alpha.emit(x + (Math.random() - 0.5) * 0.3 * spread, y + (Math.random() - 0.3) * 0.6 * spread, z + (Math.random() - 0.5) * 0.3 * spread,
+        v[0], Math.abs(v[1]) + 1.2, v[2], blue ? 0.3 : 0.95, blue ? 0.42 : 0.94, blue ? 0.85 : 0.9, 1,
+        0.012 + Math.random() * 0.022, 0.8 + Math.random() * 0.8, 11, 0.6);
+    }
+    for (let i = 0; i < 26 * n; i++) {
+      const v = randDir((1 + Math.random() * 3) * spread);
+      this.add.emit(x, y, z, v[0], v[1] + 0.8, v[2], 1, 0.78, 0.3, 1, 0.015 + Math.random() * 0.02, 0.6 + Math.random() * 0.9, 1.5, 1.5);
+    }
+    this.add.emit(x, y, z, 0, 0, 0, 1, 0.8, 0.45, 0.45, 0.45 * spread, 0.18, 0, 0, 2);
+  }
+
+  // Gold motes streaming inward while she re-forms.
+  reform(x, y, z) {
+    for (let i = 0; i < 50; i++) {
+      const v = randDir(1);
+      const r = 1.2 + Math.random() * 0.8;
+      const sx = x + v[0] * r, sy = y + 0.9 + v[1] * r, sz = z + v[2] * r;
+      this.add.emit(sx, sy, sz, (x - sx) * 2.2, (y + 0.9 - sy) * 2.2, (z - sz) * 2.2, 1, 0.8, 0.35, 1, 0.04, 0.45, 0, 0);
+    }
+  }
+
   // --- Power-ups -------------------------------------------------------------------------
   spawnPowerup(id, type, x, y, z) {
     const g = new THREE.Group();
-    const model = buildPowerupModel(type);
+    const gold = type === 'goldleaf';
+    const model = gold && this.goldModel ? this.goldModel() : buildPowerupModel(type);
     g.add(model);
-    const glow = new THREE.Sprite(this.glowMat);
-    glow.scale.setScalar(1.3);
+    const glow = new THREE.Sprite(gold ? this.goldGlowMat : this.glowMat);
+    glow.scale.setScalar(gold ? 1.8 : 1.3);
     g.add(glow);
     g.position.set(x, y + 0.8, z);
     this.scene.add(g);
-    this.powerups.set(id, { g, model, t: 0, life: 26, y: y + 0.8 });
+    this.powerups.set(id, { g, model, t: 0, life: gold ? 90 : 26, y: y + 0.8, gold });
   }
 
   removePowerup(id) {
@@ -383,6 +483,23 @@ export class FX {
     if (camPos && Math.random() < 0.5) {
       this.alpha.emit(camPos.x + (Math.random() - 0.5) * 8, camPos.y + (Math.random() - 0.5) * 3, camPos.z + (Math.random() - 0.5) * 8,
         (Math.random() - 0.5) * 0.05, (Math.random() - 0.5) * 0.03, (Math.random() - 0.5) * 0.05, 0.8, 0.75, 0.6, 0.25, 0.018, 6, 0, 0);
+    }
+    // Hellfire patches under warping hounds.
+    for (let i = this.fires.length - 1; i >= 0; i--) {
+      const f = this.fires[i];
+      f.t -= dt;
+      if (f.t <= 0) { this.fires.splice(i, 1); continue; }
+      for (let k = 0; k < 3; k++) {
+        const a = Math.random() * 6.28, r = 0.25 + Math.random() * 0.35;
+        this.add.emit(f.x + Math.cos(a) * r, f.y + 0.05, f.z + Math.sin(a) * r, 0, 1.2 + Math.random() * 1.4, 0,
+          1, 0.35 + Math.random() * 0.3, 0.06, 0.9, 0.16 + Math.random() * 0.18, 0.35 + Math.random() * 0.3, -0.4, 1, -0.2);
+      }
+    }
+    for (const b of this.bolts) {
+      if (b.life <= 0) continue;
+      b.life -= dt;
+      b.line.material.opacity = b.life > 0.2 ? 1 : b.life > 0.14 ? 0.15 : Math.max(0, b.life / 0.14);
+      if (b.life <= 0) b.line.visible = false;
     }
     this.add.update(dt);
     this.alpha.update(dt);
@@ -442,7 +559,10 @@ export class FX {
       p.model.rotation.y += dt * 1.6;
       const left = p.life - p.t;
       p.g.visible = left > 6 || Math.sin(p.t * (left < 3 ? 22 : 12)) > 0;
-      if (Math.random() < 0.3) this.add.emit(p.g.position.x + (Math.random() - 0.5) * 0.6, p.g.position.y - 0.3, p.g.position.z + (Math.random() - 0.5) * 0.6, 0, 0.6, 0, 0.4, 1, 0.5, 0.8, 0.05, 0.8, 0, 0);
+      if (Math.random() < 0.3) {
+        const [r, g, b] = p.gold ? [1, 0.8, 0.35] : [0.4, 1, 0.5];
+        this.add.emit(p.g.position.x + (Math.random() - 0.5) * 0.6, p.g.position.y - 0.3, p.g.position.z + (Math.random() - 0.5) * 0.6, 0, 0.6, 0, r, g, b, 0.8, 0.05, 0.8, 0, 0);
+      }
       if (left < -1) this.removePowerup(id);
     }
   }
@@ -459,6 +579,8 @@ export class FX {
     for (const id of [...this.projectiles.keys()]) this.removeProjectile(id);
     for (const id of [...this.powerups.keys()]) this.removePowerup(id);
     this.holes.clear(); this.splats.clear(); this.scorch.clear();
+    this.fires.length = 0;
+    for (const b of this.bolts) { b.life = 0; b.line.visible = false; }
   }
 }
 

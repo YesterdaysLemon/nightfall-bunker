@@ -4,7 +4,9 @@
 
 import * as THREE from 'three';
 import { GeoBuilder, rng } from './geo.js';
-import { ZS } from '../../shared/protocol.js';
+import { ZS, ZC } from '../../shared/protocol.js';
+import { Hounds } from './hounds.js';
+import { KintsugiBoss } from './kintsugi.js';
 
 const CAP = 48;
 const CLOTH = 0, SKIN = 1;
@@ -74,6 +76,10 @@ export class Zombies {
     this.dying = [];
     this.time = 0;
     this.interpDelay = 110;
+    // Hounds and the porcelain boss ride the same snapshot rows but draw themselves.
+    this.hounds = new Hounds(rig.scene, tex);
+    this.boss = new KintsugiBoss(rig.scene, tex);
+    this.bossInfo = { stage: 0, hpFrac: 1 };
 
     const atlas = makeAtlas(tex);
     const material = new THREE.MeshLambertMaterial({ map: atlas, vertexColors: true });
@@ -195,7 +201,7 @@ export class Zombies {
       skin: [0.85 + R() * 0.15, 0.85 + R() * 0.12, 0.8 + R() * 0.15],
       helmet: R() < 0.45,
       armDrop: R() * 0.5, limp: R() < 0.35 ? 0.25 + R() * 0.3 : 0, headTilt: (R() - 0.5) * 0.7,
-      nextGroan: 1 + R() * 5, killed: false, headless: false,
+      nextGroan: r[6] === ZC.HOUND ? 0.4 + R() * 1.5 : 1 + R() * 5, killed: false, headless: false, stepAcc: 0,
     };
   }
 
@@ -206,7 +212,7 @@ export class Zombies {
     this.list.delete(id);
     z.killed = true;
     z.deadT = 0;
-    z.kind = kind;
+    z.kind = z.cls === ZC.HOUND ? 4 : kind; // hounds always burst into flame
     z.fallDir = angle;
     z.headless = kind === 1 && Math.random() < 0.7;
     z.fallSpeed = kind === 2 ? 2.5 : 1;
@@ -214,9 +220,13 @@ export class Zombies {
     return z;
   }
 
-  // Interpolated positions for hit tests.
+  // Interpolated positions for hit tests. Enemies that can't be hit right now
+  // (a hound still materialising, the boss mid-teleport) are skipped.
   forEachTarget(fn) {
-    for (const z of this.list.values()) fn(z.id, z.x, z.y, z.z, z.state);
+    for (const z of this.list.values()) {
+      if (z.state === ZS.WARP || z.state === ZS.SHATTER || z.state === ZS.REFORM) continue;
+      fn(z.id, z.x, z.y, z.z, z.state, z.cls, z.yaw);
+    }
   }
 
   get(id) { return this.list.get(id); }
@@ -226,20 +236,40 @@ export class Zombies {
     this.time += dt;
     const rt = now - this.interpDelay;
     let n = 0;
+    let bossShown = false;
+    this.hounds.begin();
     for (const z of this.list.values()) {
       this.interpolate(z, rt, dt);
       z.stateT += dt;
-      this.pose(z, dt);
-      this.write(z, n++);
+      if (z.cls === ZC.HOUND) {
+        this.hounds.draw(z, dt, this.time);
+      } else if (z.cls === ZC.KINTSUGI) {
+        z.stage = this.bossInfo.stage; z.hpFrac = this.bossInfo.hpFrac;
+        this.boss.draw(z, dt, this.time);
+        bossShown = true;
+      } else {
+        this.pose(z, dt);
+        this.write(z, n++);
+      }
       this.voice(z, dt, listener);
     }
     for (let i = this.dying.length - 1; i >= 0; i--) {
       const z = this.dying[i];
       z.deadT += dt;
-      if (z.deadT > 4.5) { this.dying.splice(i, 1); continue; }
-      this.poseDead(z, dt);
-      if (n < CAP) this.write(z, n++);
+      const life = z.cls === ZC.HOUND ? 1.2 : z.cls === ZC.KINTSUGI ? 5.5 : 4.5;
+      if (z.deadT > life) { this.dying.splice(i, 1); continue; }
+      if (z.cls === ZC.HOUND) {
+        this.hounds.draw(z, dt, this.time);
+      } else if (z.cls === ZC.KINTSUGI) {
+        this.boss.draw(z, dt, this.time);
+        bossShown = true;
+      } else {
+        this.poseDead(z, dt);
+        if (n < CAP) this.write(z, n++);
+      }
     }
+    this.hounds.end();
+    if (!bossShown) this.boss.hide();
     for (const p of this.parts) {
       p.im.count = n;
       p.im.instanceMatrix.needsUpdate = true;
@@ -397,6 +427,8 @@ export class Zombies {
 
   // Voices stay attached to the zombie that made them.
   voice(z, dt, listener) {
+    if (z.cls === ZC.HOUND) return this.houndVoice(z, dt, listener);
+    if (z.cls === ZC.KINTSUGI) return this.bossVoice(z, dt, listener);
     z.voice?.move(z.x, z.y + 1.6, z.z);
     z.nextGroan -= dt;
     if (z.nextGroan > 0) return;
@@ -407,10 +439,33 @@ export class Zombies {
     else z.voice = this.audio.zombieGroan(pos, z.seed);
   }
 
+  // Claws on the floor while running, growls and snarl-barks between.
+  houndVoice(z, dt, listener) {
+    const pos = { x: z.x, y: z.y + 0.6, z: z.z };
+    z.voice?.move(pos.x, pos.y, pos.z);
+    if (z.state === ZS.WARP) return;
+    const near = listener ? Math.hypot(listener.x - z.x, listener.z - z.z) < 22 : true;
+    z.stepAcc += z.speed * dt;
+    if (z.stepAcc > 1.05) { z.stepAcc = 0; if (near) this.audio.houndStep?.(pos); }
+    z.nextGroan -= dt;
+    if (z.nextGroan > 0) return;
+    z.nextGroan = 1.2 + Math.random() * 2.2;
+    z.voice = Math.random() < 0.55 ? this.audio.houndGrowl?.(pos, z.seed) : this.audio.houndBark?.(pos, z.seed);
+  }
+
+  // Porcelain heels on concrete.
+  bossVoice(z, dt) {
+    if (z.state !== ZS.CHASE) return;
+    z.stepAcc += z.speed * dt;
+    if (z.stepAcc > 0.75) { z.stepAcc = 0; this.audio.bossStep?.({ x: z.x, y: z.y + 0.1, z: z.z }); }
+  }
+
   clear() {
     this.list.clear();
     this.dying.length = 0;
     for (const p of this.parts) p.im.count = 0;
+    this.hounds.clear();
+    this.boss.hide();
   }
 }
 

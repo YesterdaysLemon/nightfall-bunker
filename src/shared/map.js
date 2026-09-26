@@ -96,6 +96,19 @@ export const PLAYER_SPAWNS = [
 
 export const RADIO = { pos: [7.05, 0.86, -5.2] };
 
+// The Kintsugi easter egg: shoot three gold-mended teacups, then touch the
+// porcelain figurine on the help-room cabinet to wake her.
+export const EGG = {
+  cups: [
+    { id: 0, pos: [6.52, 0.85, -4.85] },         // beside the radio
+    { id: 1, pos: [-0.55, LOFT_Y + 0.8, -4.55] }, // on the loft desk
+    { id: 2, pos: [12.6, 1.05, 1.3], post: true }, // on a post in the courtyard, seen through the east window
+  ],
+  cupRadius: 0.11,
+  figurine: { pos: [-15.4, 1.9, 4.6], zone: 'help' },
+  boss: [-10.4, 0, -1.4],
+};
+
 export function zoneAt(x, y, z) {
   if (y > SLAB_BOTTOM - 0.4) return 'loft';
   if (x < -6) return 'help';

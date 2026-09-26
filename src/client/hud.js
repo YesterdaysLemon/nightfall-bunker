@@ -153,11 +153,35 @@ export class HUD {
     this.reviveEl.querySelector('.bar i').style.width = `${Math.round(frac * 100)}%`;
   }
 
-  center(text, sub = '', ms = 2500) {
+  center(text, sub = '', ms = 2500, tone = '') {
     this.centerEl.innerHTML = `${escapeHtml(text)}${sub ? `<small>${escapeHtml(sub)}</small>` : ''}`;
+    this.centerEl.classList.toggle('dread', tone === 'dread');
+    this.centerEl.classList.toggle('gold', tone === 'gold');
     this.centerEl.classList.add('show');
     clearTimeout(this.centerT);
     this.centerT = setTimeout(() => this.centerEl.classList.remove('show'), ms);
+  }
+
+  // Boss health: frac 0..1, or null to hide. Built on first use.
+  boss(frac, name = 'Kintsugi') {
+    if (frac == null) {
+      if (this.bossEl) this.bossEl.hidden = true;
+      this.last.boss = null;
+      return;
+    }
+    if (!this.bossEl) {
+      const el = document.createElement('div');
+      el.id = 'bossBar';
+      el.innerHTML = '<div class="name"></div><div class="bar"><i></i></div>';
+      this.el.append(el);
+      this.bossEl = el;
+    }
+    this.bossEl.hidden = false;
+    const key = `${name}|${Math.round(frac * 200)}`;
+    if (this.last.boss === key) return;
+    this.last.boss = key;
+    this.bossEl.querySelector('.name').textContent = name;
+    this.bossEl.querySelector('.bar i').style.width = `${(Math.max(0, Math.min(1, frac)) * 100).toFixed(1)}%`;
   }
 
   netinfo(text) {
@@ -192,6 +216,7 @@ export class HUD {
     this.downed(false);
     this.revive(null);
     this.hurt(0);
+    this.boss(null);
   }
 }
 

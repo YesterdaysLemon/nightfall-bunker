@@ -11,7 +11,10 @@
       "sculpt": "Skull face, gaping jaw, ribs, sunken belly, elbows, trouser creases",
       "cloth": "Coat, sleeves and shoulder cape pre-cut into strips, draped under gusting gravity",
       "softbody": "Rag tails hanging from the wrists",
-      "other": ["Hatching shader", "Print post-pass (grain, misregistration)"]
+      "other": [
+        "Hatching shader",
+        "Print post-pass (grain, misregistration)"
+      ]
     },
     "strong": "The side and back silhouettes, with the tatters streaming back, and a print look that holds from every angle. The most graphic, poster-ready direction.",
     "weak": "The face is small and the teeth barely read. The stance is more upright than the concept's hunch, and the coat front is mostly black.",
@@ -29,7 +32,11 @@
       "sculpt": "Skull face, collarbones, neck tendons, knees, elbows and hand tendons",
       "cloth": "Skirt draped over the body with a broken hem, then fired rigid",
       "softbody": "A torn sleeve flap sagged under gravity",
-      "other": ["Boolean breaks and a hollowed shell", "Numpy-painted rose tile", "Three-scale crack network"]
+      "other": [
+        "Boolean breaks and a hollowed shell",
+        "Numpy-painted rose tile",
+        "Three-scale crack network"
+      ]
     },
     "strong": "Nothing else in the lineup looks like it. The gold seams, the draped print, the hollow skull break and the gilded shoes make it eerie and precious at once.",
     "weak": "The face reads as a cartoon skull rather than gaunt and feminine, the hair is a cap from the back, and the arms feel like a mannequin's.",
@@ -46,7 +53,11 @@
       "skin": "Arms and legs, voxel-remeshed before inflating",
       "sculpt": "Seam grooves, cheeks, the button dimple, mouth, cuff rolls, cupped ears",
       "cloth": "Pressure inflation of the head, body, limbs, feet and ears, with seams pinned so panels bulge",
-      "other": ["Tube stitches placed on the surface", "Hair-curve felt fibres", "Boolean button holes"]
+      "other": [
+        "Tube stitches placed on the surface",
+        "Hair-curve felt fibres",
+        "Boolean button holes"
+      ]
     },
     "strong": "The felt, the stitched head seam, the button eye and the whip-stitched patches all read as a real toy. Shareable-cute, even from the back with its little tag.",
     "weak": "The stuffing reads as one pompom rather than a burst, a fold at the right hip hides the patch, and the hands need clearer fingers.",
@@ -64,7 +75,11 @@
       "sculpt": "Cheeks, temples, clavicles, ribs, tendons, knuckles, wrinkles and the gash, all as code brushes",
       "cloth": "Jacket draped over a low-res body collider, then torn and thickened",
       "softbody": "Torn canvas flaps hanging from a trouser cuff",
-      "other": ["Hair curves", "Particle fleece collar", "Boolean eye sockets and mouth"]
+      "other": [
+        "Hair curves",
+        "Particle fleece collar",
+        "Boolean eye sockets and mouth"
+      ]
     },
     "strong": "The stooped, lurching silhouette and the dragged bare foot, especially from the side. The one-boot detail sells the story.",
     "weak": "The least finished of the six after two rounds. Code-only realism is the hardest bar: the sleeves read as padded tubes, the trousers came out pale, and the face sits between mask and corpse. Reaching the concept would take hand sculpting or a scanned base mesh.",
@@ -82,7 +97,10 @@
       "sculpt": "Domed skull, cheekbones, tired brow and a jutting lip, with the mouth cut by boolean",
       "cloth": "Shirt draped with the top pinned, jagged hem, torn holes cut afterwards",
       "softbody": "Ear flaps droop under gravity",
-      "other": ["Boolean mouth", "Inverted-hull outlines"]
+      "other": [
+        "Boolean mouth",
+        "Inverted-hull outlines"
+      ]
     },
     "strong": "The face reads from across a room: googly eye, droopy lid, one tooth, tongue. The side-view reach is a great silhouette.",
     "weak": "The shirt is boxy at the shoulders, the hips are stiff for a shamble, and the ears are pointier than the concept's.",
@@ -97,10 +115,33 @@
       "render": "No anti-aliasing, murky green distance fog, dithered down to 400 lines"
     },
     "tech": {
-      "other": ["Rigid bmesh segments", "Numpy-painted texture page", "Vertex snap + dither"]
+      "other": [
+        "Rigid bmesh segments",
+        "Numpy-painted texture page",
+        "Vertex snap + dither"
+      ]
     },
     "strong": "The pixel face reads instantly at game distance. The cap, suspenders and bloused cuffs read too, and the fog sells the era.",
     "weak": "The hands are simple paddles and the legs run a little long. Blender can't show the era's wobbly texture warping, which a Three.js shader could.",
     "game": "Cheapest by far at 754 triangles. The segments already pivot at their joints, so they drop onto the current 13-part instanced rig with one NearestFilter texture. Vertex snap, fog and dither are each a few lines of shader."
+  },
+  "ps1b": {
+    "pitch": "The owner's favourite direction, repainted the way late-90s artists worked: light painted into the texture, 16-colour ramps per body part, the face given the biggest (mirrored) block of the page, and the frame softened like a 1997 TV instead of blown up into squares.",
+    "axes": {
+      "shape": "Same rigid 13-part build (970 triangles): two-group hands with a thumb, baggier trousers, a peaked cap",
+      "render": "Rendered at 300×400, then a composite-TV pass: soft horizontal blur, colour bleed, faint scanlines",
+      "surface": "Hand-painted folds and seams over baked light and occlusion, 16 colours per part, grime in clusters, no noise"
+    },
+    "tech": {
+      "other": [
+        "Painted light + Cycles-baked AO",
+        "16-colour palette per part",
+        "Vertex-colour tint",
+        "Composite TV pass"
+      ]
+    },
+    "strong": "It reads as a lit little painting instead of noise. The face now has planes (brow shadow, sunken milky eyes, cheekbones, a bloody mouth), and at game distance it looks exactly like a character from that era.",
+    "weak": "The cap looks a little puffy from three-quarter view, the hands are pale enough to read as gloves, and the back of the head is a plain dome.",
+    "game": "Still maps straight onto the current 13-part rig. Use a NearestFilter texture multiplied by vertex colours, gentle lighting because the texture already carries it, and a low-resolution render with a soft composite pass instead of a crisp upscale."
   }
 }

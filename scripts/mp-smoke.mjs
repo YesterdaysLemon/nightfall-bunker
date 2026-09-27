@@ -46,12 +46,14 @@ try {
   }
   await host.waitForFunction(() => window.__game.snapRows.length === 2, null, { timeout: 15000 });
   await guest.waitForFunction(() => window.__game.snapRows.length === 2, null, { timeout: 15000 });
-  // The guest walks; the host must see it move.
-  const before = await host.evaluate(() => [...window.__game.avatars.map.values()][0]?.x);
+  // The guest walks; the host must see it move. Wait for the host's avatar of
+  // the guest to exist first (a cold match can take a moment), then poll.
+  await host.waitForFunction(() => Number.isFinite([...window.__game.avatars.map.values()][0]?.x), null, { timeout: 15000 });
+  const before = await host.evaluate(() => [...window.__game.avatars.map.values()][0].x);
   await guest.evaluate(() => { const g = window.__game; g.p.x += 1.2; });
-  await host.waitForTimeout(1500);
-  const after = await host.evaluate(() => [...window.__game.avatars.map.values()][0]?.x);
-  out.guestMovedSeenByHost = Math.abs(after - before) > 0.5;
+  out.guestMovedSeenByHost = await host.waitForFunction(
+    (b) => Math.abs([...window.__game.avatars.map.values()][0].x - b) > 0.5, before, { timeout: 8000, polling: 100 },
+  ).then(() => true, () => false);
   out.match = await host.evaluate(() => ({ region: window.__game.region, rtt: Math.round(window.__game.rtt), players: window.__game.snapRows.length }));
   await host.screenshot({ path: 'output/mp/host-in-match.png' });
   if (!out.guestMovedSeenByHost) errors.push('host did not see the guest move');

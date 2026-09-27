@@ -5,12 +5,13 @@ import { LocalConnection, WsConnection, lobbyApi, sessionToken } from './net.js'
 import { PROTOCOL, REGIONS, MAX_PLAYERS, PLAYER_COLORS } from '../shared/protocol.js';
 import { escapeHtml } from './hud.js';
 import { TouchControls } from './touch.js';
+import { loadModels } from './render/models.js';
 
 const $ = (id) => document.getElementById(id);
 const screens = ['screenMain', 'screenLobby', 'screenOver'];
 
 const DEFAULTS = {
-  name: '', sensitivity: 1, fov: 80, volume: 0.8, quality: 'medium', invert: false, hrtf: true,
+  name: '', sensitivity: 1, fov: 80, volume: 0.8, quality: 'medium', invert: false, hrtf: true, retro: true,
   touchSens: 1, touchAutoFire: true, touchAssist: true, gyro: false,
 };
 
@@ -28,9 +29,12 @@ if (params.has('mute')) settings.muted = true;
 if (!settings.name) settings.name = `Survivor${Math.floor(100 + Math.random() * 900)}`;
 const token = sessionToken();
 
+// Painted low-poly characters from the art pipeline (missing ones fall back to procedural art).
+const models = await loadModels(['ghoul', 'hound', 'kintsugi', 'survivor']);
+
 let game;
 try {
-  game = new Game($('view'), settings);
+  game = new Game($('view'), settings, models);
 } catch (err) {
   console.error(err);
   $('loadingText').textContent = 'WebGL is not available in this browser.';
@@ -69,6 +73,7 @@ $('setVol').value = settings.volume;
 $('setQuality').value = settings.quality;
 $('setInvert').checked = settings.invert;
 $('setHrtf').checked = settings.hrtf;
+$('setRetro').checked = settings.retro !== false;
 $('setTouchSens').value = settings.touchSens;
 $('setAutoFire').checked = settings.touchAutoFire;
 $('setAssist').checked = settings.touchAssist;
@@ -81,6 +86,7 @@ const syncSettings = () => {
   settings.quality = $('setQuality').value;
   settings.invert = $('setInvert').checked;
   settings.hrtf = $('setHrtf').checked;
+  settings.retro = $('setRetro').checked;
   settings.touchSens = Number($('setTouchSens').value);
   settings.touchAutoFire = $('setAutoFire').checked;
   settings.touchAssist = $('setAssist').checked;
@@ -94,7 +100,7 @@ $('setGyro').addEventListener('change', async () => {
   settings.gyro = $('setGyro').checked;
 });
 $('btnEditTouch').addEventListener('click', () => { $('menu').hidden = true; touch.edit(true); });
-for (const id of ['nameInput', 'setSens', 'setFov', 'setVol', 'setQuality', 'setInvert', 'setHrtf', 'setTouchSens', 'setAutoFire', 'setAssist']) $(id).addEventListener('change', syncSettings);
+for (const id of ['nameInput', 'setSens', 'setFov', 'setVol', 'setQuality', 'setInvert', 'setHrtf', 'setRetro', 'setTouchSens', 'setAutoFire', 'setAssist']) $(id).addEventListener('change', syncSettings);
 
 function show(screen) {
   $('menu').hidden = !screen;

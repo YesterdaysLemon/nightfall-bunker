@@ -9,6 +9,7 @@ import {
 import { WEAPONS, WALL_PRICES, BOX_COST, BOX_POOL, START_WEAPON, KNIFE, GRENADE } from '../shared/weapons.js';
 import { PS, ZS, ZC, IN, PROTOCOL, PLAYER_COLORS, REGIONS } from '../shared/protocol.js';
 import { EggProps } from './render/egg.js';
+import { prepareRetroTextures, setRetroTextures } from './render/retro.js';
 import { buildTeacup } from './render/kintsugi.js';
 import { SceneRig } from './render/scene.js';
 import { createTextures } from './render/textures.js';
@@ -30,11 +31,16 @@ const POWERUP_NAMES = { maxammo: 'Max Ammo', instakill: 'Insta-Kill', doublepoin
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _dir = new THREE.Vector3(), _up = new THREE.Vector3();
 
 export class Game {
-  constructor(canvas, settings) {
+  constructor(canvas, settings, models = {}) {
     this.canvas = canvas;
     this.settings = settings;
+    this.models = models;
     this.rig = new SceneRig(canvas, settings.quality);
     this.tex = createTextures(this.rig.renderer);
+    // The 1997 look (art/STYLE.md): small-palette textures and the TV pass.
+    prepareRetroTextures(this.tex);
+    setRetroTextures(this.tex, settings.retro !== false);
+    this.rig.setRetro(settings.retro !== false);
     this.muted = !!settings.muted;
     this.audio = new AudioEngine({ masterVolume: this.muted ? 0 : settings.volume, hrtf: settings.hrtf !== false });
     this.audio.occlusion = (x, y, z) => this.occlusionAt(x, y, z);
@@ -42,11 +48,11 @@ export class Game {
     this.exterior = new Exterior(this.rig, this.level.mats, this.tex);
     this.world = new World();
     this.fx = new FX(this.rig, this.tex, this.world, this.audio);
-    this.zombies = new Zombies(this.rig, this.tex, this.audio, this.fx);
+    this.zombies = new Zombies(this.rig, this.tex, this.audio, this.fx, models);
     this.zombies.onSpawn = (z) => this.onZombieSpawn(z);
-    this.egg = new EggProps(this.rig, this.tex);
-    this.fx.goldModel = () => { const g = buildTeacup(); g.scale.setScalar(3.4); g.position.y = -0.15; return g; };
-    this.avatars = new Avatars(this.rig.scene, this.tex);
+    this.egg = new EggProps(this.rig, this.tex, models.kintsugi);
+    this.fx.goldModel = () => { const g = buildTeacup(models.kintsugi); g.scale.setScalar(3.4); g.position.y = -0.15; return g; };
+    this.avatars = new Avatars(this.rig.scene, this.tex, models.survivor || null);
     this.vm = new ViewModel(this.rig.renderer, this.rig.scene);
     this.hud = new HUD();
     this.input = new Input(canvas);
@@ -59,6 +65,7 @@ export class Game {
     addEventListener('resize', () => this.resize());
     this.resize();
     this.warmup();
+    this.setRetro(settings.retro !== false); // after warmup: every gun model exists now
     this.loop = this.loop.bind(this);
     requestAnimationFrame(this.loop);
   }
@@ -135,9 +142,17 @@ export class Game {
     this.vm.resize(innerWidth / innerHeight);
   }
 
+  // The 1997 look: small-palette world textures and the TV pass. (Models and
+  // guns are always the painted low-poly versions.)
+  setRetro(on) {
+    setRetroTextures(this.tex, on);
+    this.rig.setRetro(on);
+  }
+
   applySettings(s) {
     this.settings = s;
     this.rig.setQuality(s.quality);
+    this.setRetro(s.retro !== false);
     this.audio.setMasterVolume(this.muted ? 0 : s.volume);
     this.audio.hrtf = s.hrtf !== false;
   }
@@ -1137,12 +1152,13 @@ export class Game {
   render() {
     const r = this.rig.renderer;
     r.toneMappingExposure = 1.15 + (this.flashWhite || 0) * 4;
-    r.clear();
+    this.rig.beginFrame();
     r.render(this.rig.scene, this.rig.camera);
     if (this.mode === 'play' && this.p.state !== PS.DEAD) {
       r.clearDepth();
       r.render(this.vm.scene, this.vm.camera);
     }
+    this.rig.endFrame();
   }
 }
 

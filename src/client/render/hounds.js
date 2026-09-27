@@ -1,21 +1,33 @@
 // Hellhounds: skeletal, charred hounds with glowing ember cracks and burning
-// eyes. One template quadruped rig drives 13 InstancedMeshes (11 lit body
-// parts + 2 unlit ember parts), so the whole pack costs a fixed 13 draw calls.
+// eyes. One template quadruped rig drives a fixed set of InstancedMeshes, so the
+// whole pack (up to 32) costs a fixed number of draw calls.
 // Procedural animation: warp-in, trot, rotary gallop, lunge-bite, burn-out.
 //
-//   const h = new Hounds(scene, tex);
+//   const h = new Hounds(scene, tex, model);   // model: loadModels(['hound']).hound, may be null
 //   h.begin(); for (const d of hounds) h.draw(d, dt, time); h.end();
+//
+// With a model (public/models/hound.json, built by art/zombies/z_hound.py) the
+// rig comes from model.joints and there is one InstancedMesh per model part (11
+// draw calls): Lambert with the painted page as `map` and the glow page as
+// `emissiveMap`, scaled per hound (warp flicker, bite flare, burn-out) through an
+// instanced `houndGlow` attribute. Parts listed in model.meta.shared (the legs)
+// are drawn at every listed joint. Without a model the procedural hound below is
+// used (13 draw calls).
 //
 // draw() advances d.phase (gait) and caches a little scratch on d (d._hk).
 
 import * as THREE from 'three';
 import { ZS as ZSP } from '../../shared/protocol.js';
+import { buildJoints } from './models.js';
 
 const ZS = { CHASE: ZSP.CHASE ?? 4, ATTACK: ZSP.ATTACK ?? 5, WARP: ZSP.WARP ?? 6 };
 const CAP = 32;
 const TAU = Math.PI * 2;
 const FLESH = 0, BONE = 1;
 const WARP_T = 0.9, ATTACK_T = 0.35, DEATH_T = 0.72;
+const JOINTS = ['body', 'spine', 'fore', 'hind', 'neck', 'head', 'jaw', 'shL', 'shR', 'elL', 'elR',
+  'hipL', 'hipR', 'stL', 'stR', 'hkL', 'hkR', 'tail'];
+const GLOW_GAIN = 1.7; // emissive intensity of the model's glow page (the per-hound glow multiplies it)
 
 // Palette carried in vertex colours; the atlas adds char, ash and cracks.
 const COL = {
@@ -207,10 +219,77 @@ function makeAtlas() {
 
 // --- Renderer -------------------------------------------------------------------------
 export class Hounds {
-  constructor(scene, tex) {
+  constructor(scene, tex, model = null) {
     this.scene = scene;
     this.tex = tex;
     this.n = 0;
+    this.breathe = 1;
+    this._m = new THREE.Matrix4();
+    this._s = new THREE.Matrix4();
+    this._q = new THREE.Quaternion();
+    this._qy = new THREE.Quaternion();
+    this._axis = new THREE.Vector3();
+    this._c = new THREE.Color();
+    this._g = new THREE.Color();
+    this.model = model && this.buildModel(scene, model) ? model : null;
+    if (!this.model) this.buildProcedural(scene);
+  }
+
+  // The Blender-built hound: rig from model.joints, one InstancedMesh per part.
+  buildModel(scene, model) {
+    const root = new THREE.Object3D();
+    const nodes = buildJoints(model, root);
+    const missing = JOINTS.filter((n) => !nodes[n]);
+    if (missing.length || !model.parts?.size) {
+      console.warn(`hound model unusable (missing joints: ${missing.join(', ')}); using procedural hounds`);
+      return false;
+    }
+    this.J = { root };
+    for (const n of JOINTS) this.J[n] = nodes[n];
+    const parts = [...model.parts.values()];
+    const colors = parts.some((p) => p.hasColor);
+    const glow = model.emissive ? 1 : 0;
+    const material = new THREE.MeshLambertMaterial({
+      map: model.texture, vertexColors: colors,
+      emissive: new THREE.Color(glow, glow, glow), emissiveMap: model.emissive || null, emissiveIntensity: GLOW_GAIN,
+    });
+    // Per-hound glow: an instanced colour that scales only the emissive (glow page) term.
+    material.onBeforeCompile = (sh) => {
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nattribute vec3 houndGlow;\nvarying vec3 vHoundGlow;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\n\tvHoundGlow = houndGlow;');
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vHoundGlow;')
+        .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n\ttotalEmissiveRadiance *= vHoundGlow;');
+    };
+    material.customProgramCacheKey = () => 'hound-model-glow';
+    this.material = material;
+    const shared = model.meta?.shared || {};
+    this.parts = parts.map((part) => {
+      const joints = (shared[part.name] || [part.joint]).map((j) => nodes[j]).filter(Boolean);
+      const n = CAP * joints.length;
+      const g = part.geometry.clone();
+      if (colors && !part.hasColor) {
+        g.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count * 3).fill(1), 3));
+      }
+      const glowAttr = new THREE.InstancedBufferAttribute(new Float32Array(n * 3), 3);
+      glowAttr.setUsage(THREE.DynamicDrawUsage);
+      g.setAttribute('houndGlow', glowAttr);
+      const im = new THREE.InstancedMesh(g, material, n);
+      im.name = `hound-${part.name}`;
+      im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      im.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(n * 3).fill(1), 3);
+      im.instanceColor.setUsage(THREE.DynamicDrawUsage);
+      im.frustumCulled = false;
+      im.count = 0;
+      scene.add(im);
+      return { im, joints, glow: false, glowAttr, breathe: part.name === 'torso' };
+    });
+    return true;
+  }
+
+  // Fallback: the original procedural hound (primitives, canvas atlas, unlit ember parts).
+  buildProcedural(scene) {
     const atlas = makeAtlas();
     this.material = new THREE.MeshLambertMaterial({
       map: atlas.map, vertexColors: true,
@@ -374,13 +453,6 @@ export class Hounds {
       scene.add(im);
       return { im, joints, glow, breathe: name === 'torso' || name === 'chestGlow' };
     });
-    this._m = new THREE.Matrix4();
-    this._s = new THREE.Matrix4();
-    this._q = new THREE.Quaternion();
-    this._qy = new THREE.Quaternion();
-    this._axis = new THREE.Vector3();
-    this._c = new THREE.Color();
-    this._g = new THREE.Color();
   }
 
   begin() { this.n = 0; }
@@ -390,6 +462,7 @@ export class Hounds {
       p.im.count = this.n * p.joints.length;
       p.im.instanceMatrix.needsUpdate = true;
       p.im.instanceColor.needsUpdate = true;
+      if (p.glowAttr) p.glowAttr.needsUpdate = true;
     }
   }
 
@@ -640,6 +713,7 @@ export class Hounds {
         if (p.breathe && br !== 1) m = this._m.multiplyMatrices(m, this._s);
         p.im.setMatrixAt(i * nj + j, m);
         p.im.setColorAt(i * nj + j, p.glow ? this._g : this._c);
+        if (p.glowAttr) p.glowAttr.setXYZ(i * nj + j, this._g.r, this._g.g, this._g.b);
       }
     }
   }

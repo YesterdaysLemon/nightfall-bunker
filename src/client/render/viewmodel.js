@@ -25,7 +25,8 @@ const ease = (t) => t * t * (3 - 2 * t);
 export class ViewModel {
   constructor(renderer, mainScene) {
     this.scene = new THREE.Scene();
-    // Metals need something to reflect or they render black.
+    // Environment for the main scene's physical materials; the gun, hand and
+    // pickup materials are painted Lambert/Phong and do not use it.
     const pmrem = new THREE.PMREMGenerator(renderer);
     const env = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
     pmrem.dispose();
@@ -33,9 +34,12 @@ export class ViewModel {
     this.scene.environmentIntensity = 0.35;
     if (mainScene) { mainScene.environment = env; mainScene.environmentIntensity = 0.18; }
     this.camera = new THREE.PerspectiveCamera(58, 1, 0.01, 10);
-    this.hemi = new THREE.HemisphereLight(0xb8c4e0, 0x2a2018, 0.9);
-    this.key = new THREE.DirectionalLight(0xffd7a8, 1.4);
-    this.key.position.set(0.6, 1, 0.4);
+    // The models carry painted light (weapons3d.js): a soft, nearly neutral
+    // fill plus a warm overhead key that agrees with the painted one, both
+    // following the brightness where the player stands.
+    this.hemi = new THREE.HemisphereLight(0xd2cdc4, 0x30261e, 1.2);
+    this.key = new THREE.DirectionalLight(0xffe0bc, 1.0);
+    this.key.position.set(-0.2, 1, 0.15);
     this.flash = new THREE.PointLight(0xffc27a, 0, 2.5, 1.5);
     this.flash.position.set(0.1, -0.05, -0.8);
     this.scene.add(this.hemi, this.key, this.flash);
@@ -202,8 +206,8 @@ export class ViewModel {
       r.x -= ease(Math.max(0, u)) * 0.7;
     }
     this.animate(dt, p, r);
-    this.hemi.intensity = 0.35 + s.light * 0.55;
-    this.key.intensity = 0.4 + s.light * 1.1;
+    this.hemi.intensity = 0.5 + s.light * 0.75;
+    this.key.intensity = 0.3 + s.light * 0.8;
     this.scene.environmentIntensity = 0.12 + s.light * 0.3;
     this.camera.fov = 58 - this.ads * 8;
     this.camera.updateProjectionMatrix();

@@ -143,5 +143,78 @@
     "strong": "It reads as a lit little painting instead of noise. The face now has planes (brow shadow, sunken milky eyes, cheekbones, a bloody mouth), and at game distance it looks exactly like a character from that era.",
     "weak": "The cap looks a little puffy from three-quarter view, the hands are pale enough to read as gloves, and the back of the head is a plain dome.",
     "game": "Still maps straight onto the current 13-part rig. Use a NearestFilter texture multiplied by vertex colours, gentle lighting because the texture already carries it, and a low-resolution render with a soft composite pass instead of a crisp upscale."
+  },
+  "ps1c": {
+    "pitch": "The chosen direction, rebuilt sharp: no more pillowy lofts. Six-sided tapered limbs, pointed shoulders, elbows and knees, a boxy skull with a brow ridge, sunken sockets and a wedge chin, all with hard normals. This is the zombie you now fight in the game.",
+    "axes": {
+      "shape": "Faceted prisms and wedges, hunched and gaunt; 1155 triangles in 13 rigid parts",
+      "surface": "The v2 painted page, repainted to the facets: one-texel highlights on ridges, dark lines in creases",
+      "render": "Engine: Lambert under the bunker bulbs, 300-line frame, soft TV pass"
+    },
+    "tech": {
+      "other": [
+        "Hard normals over 30°",
+        "Painted light + baked AO",
+        "Exported to the game (ghoul.json)",
+        "Cap and helmet variants"
+      ]
+    },
+    "strong": "It reads as sharp and period-correct at any distance, and it walks, climbs and falls on the existing rig.",
+    "weak": "The shoulders read a little like square pads, and the arms hang slightly inside the rig because its shoulders are so wide.",
+    "game": "Live in the game as every zombie: 13 instanced parts, cap, helmet or bare-headed per zombie, and subtle tints for variety."
+  },
+  "hound": {
+    "pitch": "A skeletal wolf-dog from the same disc as the Ghoul: deep wedge chest, a knife-edge spine of spikes, a long snout with a separate jaw, and ember cracks that glow in the hound-round fog.",
+    "axes": {
+      "shape": "Angular hard-edged segments, 897 triangles, 11 rigid parts",
+      "surface": "Charred black-brown hide with cool shadows; ember cracks and eyes on a glow page",
+      "render": "Engine: Lambert plus glow map, pulsing when it warps in, bites or dies"
+    },
+    "tech": {
+      "other": [
+        "Painted glow page",
+        "Exported to the game (hound.json)",
+        "Existing gallop and lunge animations"
+      ]
+    },
+    "strong": "The silhouette and embers read in fog at a distance. A full pack of 32 costs 11 draw calls.",
+    "weak": "About 40% of the texture page is empty, both sides share the same leg paint, and the eyes are only a few pixels at 7 m.",
+    "game": "Live in hound rounds."
+  },
+  "kintsugi": {
+    "pitch": "The porcelain boss rebuilt as a 1997 model: faceted victory rolls, a skeletal face with empty sockets, and a faceted tea dress. The cobalt print and gold seams are painted in, and the seams glow. Her skull cap, forearm and skirt shards break off as real pieces.",
+    "axes": {
+      "shape": "Hard-edged rigid segments, 1159 triangles; separable skull cap, forearm and skirt shards",
+      "surface": "Painted gloss glints on white glaze, cobalt roses in clusters, gold seams on a glow page, bisque at the breaks",
+      "render": "Engine: Lambert plus pulsing gold emissive, stop-motion when unwatched"
+    },
+    "tech": {
+      "other": [
+        "Painted glow page",
+        "Exported to the game (kintsugi.json)",
+        "Figurine and teacup props in the same file"
+      ]
+    },
+    "strong": "She now matches the Ghoul, the figurine and teacups match her, and the damage stages are physical pieces.",
+    "weak": "The rose print reads as blocky splotches, and the hair rolls can look like ears from straight on.",
+    "game": "Live as the easter-egg boss, figurine and teacups."
+  },
+  "survivor": {
+    "pitch": "How your teammates see you: a 1940s airfield GI in the same faceted world, with a helmet, rolled sleeves and webbing. Each player colour is painted onto the helmet band, armbands and neckerchief.",
+    "axes": {
+      "shape": "Faceted rigid segments, 1098 triangles, hands solved onto each gun",
+      "surface": "Olive drab and khaki, warm living skin, a painted determined face",
+      "render": "Engine: Lambert, per-player tint with a faint glow"
+    },
+    "tech": {
+      "other": [
+        "Exported to the game (survivor.json)",
+        "Per-player tint parts",
+        "Two-hand grip solve per gun"
+      ]
+    },
+    "strong": "All four player colours read clearly through the TV pass, and the silhouette says soldier, not zombie.",
+    "weak": "Rifles are held at chest height rather than at the cheek, the left hand can't reach the front of long guns, and warm bulbs push the skin orange.",
+    "game": "Live as teammates' avatars in multiplayer."
   }
 }

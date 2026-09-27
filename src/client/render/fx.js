@@ -464,6 +464,13 @@ export class FX {
   // --- Frame --------------------------------------------------------------------------------
   update(dt, camPos) {
     this.time += dt;
+    // Point sprites are sized in pixels: keep them world-sized whatever the
+    // render height (the retro frame is only ~300 lines tall).
+    const rig = this.rig;
+    const h = rig.retro && rig.rt ? rig.rt.height : rig.renderer.getDrawingBufferSize(this._sz || (this._sz = new THREE.Vector2())).y;
+    const ps = h / (2 * Math.tan(THREE.MathUtils.degToRad(rig.camera.fov) / 2));
+    this.add.material.uniforms.scale.value = ps;
+    this.alpha.material.uniforms.scale.value = ps;
     // Burning wreck.
     for (const f of this.fireAt) {
       for (let i = 0; i < 2; i++) {

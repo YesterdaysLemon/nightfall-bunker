@@ -7,6 +7,7 @@ import { GeoBuilder, rng } from './geo.js';
 import { ZS, ZC } from '../../shared/protocol.js';
 import { Hounds } from './hounds.js';
 import { KintsugiBoss } from './kintsugi.js';
+import { buildJoints } from './models.js';
 
 const CAP = 48;
 const CLOTH = 0, SKIN = 1;
@@ -68,7 +69,7 @@ function makeAtlas(tex) {
 }
 
 export class Zombies {
-  constructor(rig, tex, audio, fx) {
+  constructor(rig, tex, audio, fx, models = {}) {
     this.rig = rig;
     this.audio = audio;
     this.fx = fx;
@@ -77,10 +78,23 @@ export class Zombies {
     this.time = 0;
     this.interpDelay = 110;
     // Hounds and the porcelain boss ride the same snapshot rows but draw themselves.
-    this.hounds = new Hounds(rig.scene, tex);
-    this.boss = new KintsugiBoss(rig.scene, tex);
+    this.hounds = new Hounds(rig.scene, tex, models.hound || null);
+    this.boss = new KintsugiBoss(rig.scene, tex, models.kintsugi || null);
+    this.ghoul = models.ghoul || null;
     this.bossInfo = { stage: 0, hpFrac: 1 };
 
+    if (this.ghoul) this.buildFromModel(this.ghoul, rig);
+    else this.buildProcedural(tex, rig);
+    this._m = new THREE.Matrix4();
+    this._q = new THREE.Quaternion();
+    this._qy = new THREE.Quaternion();
+    this._axis = new THREE.Vector3();
+    this._up = new THREE.Vector3(0, 1, 0);
+    this._c = new THREE.Color();
+  }
+
+  // Fallback: the original procedural zombie (used when ghoul.json is unavailable).
+  buildProcedural(tex, rig) {
     const atlas = makeAtlas(tex);
     const material = new THREE.MeshLambertMaterial({ map: atlas, vertexColors: true });
     const P = (specs) => partGeo(specs);
@@ -155,14 +169,37 @@ export class Zombies {
         im.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(CAP * 3).fill(1), 3);
       }
       rig.scene.add(im);
-      return { im, joint, name: geoName, head: geoName === 'head' || geoName === 'eyes' || geoName === 'helmet', skin: geoName === 'head' };
+      return { im, joint, name: geoName, hat: geoName === 'helmet' ? 2 : 0, head: geoName === 'head' || geoName === 'eyes' || geoName === 'helmet', skin: geoName === 'head' };
     });
-    this._m = new THREE.Matrix4();
-    this._q = new THREE.Quaternion();
-    this._qy = new THREE.Quaternion();
-    this._axis = new THREE.Vector3();
-    this._up = new THREE.Vector3(0, 1, 0);
-    this._c = new THREE.Color();
+  }
+
+  // The painted low-poly Ghoul: one instanced mesh per exported part, driven by
+  // the same joint names as the procedural rig so every animation still applies.
+  buildFromModel(model, rig) {
+    const nodes = buildJoints(model);
+    const J = (n) => nodes[n] || nodes.body;
+    this.rigJ = {
+      root: nodes.root, body: J('body'), hips: J('hips'), spine: J('spine'), neck: J('neck'),
+      shL: J('shL'), shR: J('shR'), elL: J('elL'), elR: J('elR'), hipL: J('hipL'), hipR: J('hipR'), knL: J('knL'), knR: J('knR'),
+    };
+    const lit = new THREE.MeshLambertMaterial({ map: model.texture });
+    const litV = new THREE.MeshLambertMaterial({ map: model.texture, vertexColors: true });
+    // Eyes stay faintly lit in the dark so zombies read at a distance.
+    const eyeMat = new THREE.MeshBasicMaterial({ map: model.texture, color: 0xffe2b0 });
+    this.parts = [];
+    for (const part of model.parts.values()) {
+      const joint = nodes[part.joint];
+      if (!joint) continue;
+      const eyes = part.name === 'eyes';
+      const im = new THREE.InstancedMesh(part.geometry, eyes ? eyeMat : part.hasColor ? litV : lit, CAP);
+      im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      im.frustumCulled = false;
+      im.count = 0;
+      if (!eyes) im.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(CAP * 3).fill(1), 3);
+      rig.scene.add(im);
+      const hat = part.name === 'cap' ? 1 : part.name === 'helmet' ? 2 : 0;
+      this.parts.push({ im, joint, name: part.name, hat, head: part.name === 'head' || eyes || hat > 0, skin: part.name === 'head' });
+    }
   }
 
   // --- Network sync -----------------------------------------------------------------
@@ -199,7 +236,7 @@ export class Zombies {
       x: r[1] / 100, y: r[2] / 100, z: r[3] / 100, yaw: r[4] / 1000,
       cloth: [tint * (0.92 + hue * 0.12), tint * (0.95 + 0.05 * R()), tint * (0.9 + (1 - hue) * 0.12)],
       skin: [0.85 + R() * 0.15, 0.85 + R() * 0.12, 0.8 + R() * 0.15],
-      helmet: R() < 0.45,
+      hat: R() < 0.4 ? 2 : R() < 0.55 ? 1 : 0, // 0 bare, 1 garrison cap, 2 steel helmet
       armDrop: R() * 0.5, limp: R() < 0.35 ? 0.25 + R() * 0.3 : 0, headTilt: (R() - 0.5) * 0.7,
       nextGroan: r[6] === ZC.HOUND ? 0.4 + R() * 1.5 : 1 + R() * 5, killed: false, headless: false, stepAcc: 0,
     };
@@ -411,7 +448,7 @@ export class Zombies {
     J.root.updateMatrixWorld(true);
     const c = this._c;
     for (const p of this.parts) {
-      if ((p.head && z.headless) || (p.name === 'helmet' && !z.helmet)) {
+      if ((p.head && z.headless) || (p.hat && p.hat !== z.hat)) {
         p.im.setMatrixAt(i, this._m.makeScale(0, 0, 0));
       } else {
         p.im.setMatrixAt(i, p.joint.matrixWorld);

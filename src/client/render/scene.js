@@ -3,11 +3,13 @@
 
 import * as THREE from 'three';
 import { LIGHTS } from '../../shared/map.js';
+import { makeTvPass } from './retro.js';
 
+// lines: internal vertical resolution of the retro (1997 TV) frame.
 const QUALITY = {
-  low: { ratio: 0.75, maxRatio: 1, aniso: 2 },
-  medium: { ratio: 1, maxRatio: 1.5, aniso: 4 },
-  high: { ratio: 1, maxRatio: 2, aniso: 8 },
+  low: { ratio: 0.75, maxRatio: 1, aniso: 2, lines: 240 },
+  medium: { ratio: 1, maxRatio: 1.5, aniso: 4, lines: 300 },
+  high: { ratio: 1, maxRatio: 2, aniso: 8, lines: 360 },
 };
 
 export class SceneRig {
@@ -79,11 +81,51 @@ export class SceneRig {
     this.resize();
   }
 
+  // The 1997 look: render into a small target and let the TV pass present it.
+  setRetro(on) {
+    this.retro = !!on;
+    if (this.retro && !this.tv) {
+      this.tv = makeTvPass();
+      this.rt = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, depthBuffer: true, stencilBuffer: false });
+      this.rt.texture.minFilter = THREE.LinearFilter;
+      this.rt.texture.magFilter = THREE.LinearFilter;
+      this.rt.texture.generateMipmaps = false;
+      this.tv.material.uniforms.tScene.value = this.rt.texture;
+    }
+    this.resize();
+  }
+
+  // Start a frame: the scene and viewmodel render into whatever this selects.
+  beginFrame() {
+    this.renderer.setRenderTarget(this.retro ? this.rt : null);
+    this.renderer.clear();
+  }
+
+  // Present: the TV pass draws the small frame to the screen.
+  endFrame() {
+    if (!this.retro) return;
+    this.renderer.setRenderTarget(null);
+    this.renderer.render(this.tv.scene, this.tv.camera);
+  }
+
   resize() {
     const w = window.innerWidth, h = window.innerHeight;
-    const ratio = Math.min(window.devicePixelRatio || 1, this.q.maxRatio) * this.q.ratio * this.dynScale;
+    // In retro mode the canvas only draws the TV quad, so it can use the full
+    // device resolution cheaply (sharp scanlines); the 3D scene is small.
+    const ratio = this.retro
+      ? Math.min(window.devicePixelRatio || 1, 2)
+      : Math.min(window.devicePixelRatio || 1, this.q.maxRatio) * this.q.ratio * this.dynScale;
     this.renderer.setPixelRatio(ratio);
     this.renderer.setSize(w, h, false);
+    if (this.retro && this.rt) {
+      // A fixed number of lines (fewer while frames run long), width by aspect.
+      const lines = Math.max(200, Math.round(this.q.lines * (0.55 + this.dynScale * 0.45)));
+      const rw = Math.round(lines * (w / h));
+      this.rt.setSize(rw, lines);
+      this.tv.material.uniforms.uRes.value.set(rw, lines);
+      // Scanlines only where there are enough real pixels per line to draw them.
+      this.tv.material.uniforms.uScan.value = (h * ratio) / lines >= 2 ? 0.16 : 0;
+    }
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
   }

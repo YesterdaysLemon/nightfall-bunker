@@ -7,12 +7,12 @@ import { raySphere } from '../../shared/world.js';
 import { buildFigurine, buildTeacup } from './kintsugi.js';
 
 export class EggProps {
-  constructor(rig, tex) {
+  constructor(rig, tex, model = null) {
     this.rig = rig;
     this.group = new THREE.Group();
     rig.scene.add(this.group);
     this.cups = EGG.cups.map((c) => {
-      const g = buildTeacup();
+      const g = buildTeacup(model);
       g.position.set(c.pos[0], c.pos[1], c.pos[2]);
       g.rotation.y = c.id * 1.7;
       this.group.add(g);
@@ -28,7 +28,7 @@ export class EggProps {
       m.rotation.y = 0.4;
       this.group.add(m);
     }
-    this.figurine = buildFigurine();
+    this.figurine = buildFigurine(model);
     const f = EGG.figurine.pos;
     this.figurine.position.set(f[0], f[1], f[2]);
     this.figurine.rotation.y = Math.PI / 2; // faces into the room (+x)

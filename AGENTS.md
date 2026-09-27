@@ -106,6 +106,29 @@ Real WWII weapon names are fine; the wonder weapon is the original Arc Pistol.
   join a lobby, start a match and check they see each other (works on prod).
 - `npm run build:worker` — bundles the Worker to `dist-worker/index.js`.
 
+## The 1997 look (current art direction)
+
+- The owner chose the Polygon Ghoul (late-90s console) direction for the whole
+  game. `art/STYLE.md` is the world bible: sharp faceted low-poly, painted-light
+  texture pages, shared palette ramps, and the export format. Every new
+  character or prop follows it.
+- **Characters** are exported from Blender as `public/models/<id>.json` + `.png`
+  (+ optional `_glow.png`). They are loaded at boot by
+  `src/client/render/models.js` (`loadModels`, `buildJoints`). Missing models
+  fall back to the procedural art.
+  - `ghoul`: in-game zombie, built from `art/zombies/z_ps1c.py`, used by `zombies.js`.
+  - `hound`: `z_hound.py`, used by `hounds.js`.
+  - `kintsugi`: boss, figurine and teacup; `z_kintsugi.py`, used by `kintsugi.js` and `egg.js`.
+- **Render** (`src/client/render/retro.js`, setting "1997 TV look", on by default):
+  - The scene renders into a small target: 240, 300 or 360 lines by quality,
+    shrinking under load.
+  - The TV pass presents it: crisp rows with scanlines, soft columns and
+    composite colour bleed, ACES tone mapping, a world colour grade, and 15-bit
+    colour with an ordered dither.
+  - World textures swap to quarter-size small-palette versions (blended when
+    magnified, crisp when minified). Gun materials go flat-shaded.
+  - Particle sizes follow the render height.
+
 ## Art direction (zombie style explorations)
 
 - `art/zombies/` holds code-built Blender 5.2 models of the zombie in six styles:

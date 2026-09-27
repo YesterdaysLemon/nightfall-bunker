@@ -1,7 +1,13 @@
-// Procedural low-poly first-person models: weapons, knife, grenade, hands and
-// power-ups. Built from primitives, then merged per material so each model is
-// a handful of draw calls (one per material for static geometry, plus one per
-// material inside each animated part).
+// Procedural first-person models (weapons, knife, grenade, hands, power-ups)
+// in the 1997 look of art/STYLE.md: sharp faceted primitives (6-10 sided
+// barrels, receivers with bevelled long edges, hard per-face normals), small
+// painted texture pages sampled nearest, and painted light baked into vertex
+// colours (top-front key, cool shadows, warm bounce, creases darkened, worn
+// bright chamfers on steel). Textures are painted in software from seeded
+// noise and quantised onto hue-shifted ramps, so tones sit in flat clusters.
+// Built from primitives, then merged per material so each model is a handful
+// of draw calls (one per material for static geometry, plus one per material
+// inside each animated part).
 //
 // Weapon conventions (meters): origin = trigger-hand / pistol-grip position,
 // barrel toward -Z, +Y up, centred on X = 0.
@@ -9,6 +15,8 @@
 //   userData.parts : { mag, bolt, pump, slide, barrels } animated sub-groups
 //                    (each carries userData.restPosition / restRotation)
 //   userData.length : overall length in meters
+// Every material carries userData.chalk (metal/wood/dark/hole/glass/glow/skin/
+// cloth): chalk.js traces wall-buy outlines from these classes.
 
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
@@ -19,56 +27,334 @@ const HALF = PI / 2;
 const TAU = PI * 2;
 
 // ---------------------------------------------------------------------------
+// Painted texture pages
+// ---------------------------------------------------------------------------
+
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Tileable value noise on a (w/cx) x (h/cy) lattice, smoothly interpolated.
+function noise(w, h, cx, cy, r) {
+  const gw = Math.max(1, Math.round(w / cx));
+  const gh = Math.max(1, Math.round(h / cy));
+  const grid = new Float32Array(gw * gh);
+  for (let i = 0; i < grid.length; i++) grid[i] = r();
+  const out = new Float32Array(w * h);
+  const sm = (t) => t * t * (3 - 2 * t);
+  for (let y = 0; y < h; y++) {
+    const fy = (y / h) * gh;
+    const y0 = Math.floor(fy);
+    const ty = sm(fy - y0);
+    const r0 = (y0 % gh) * gw;
+    const r1 = ((y0 + 1) % gh) * gw;
+    for (let x = 0; x < w; x++) {
+      const fx = (x / w) * gw;
+      const x0 = Math.floor(fx);
+      const tx = sm(fx - x0);
+      const a = x0 % gw;
+      const b = (x0 + 1) % gw;
+      const top = grid[r0 + a] + (grid[r0 + b] - grid[r0 + a]) * tx;
+      const bot = grid[r1 + a] + (grid[r1 + b] - grid[r1 + a]) * tx;
+      out[y * w + x] = top + (bot - top) * ty;
+    }
+  }
+  return out;
+}
+
+// World ramps (art/STYLE.md, z_ps1b.py RAMPS): dark to light, cool shadows,
+// warm highlights. Metals and wood extend the table in the same value range.
+const RAMP = {
+  blued: [[14, 15, 18], [21, 23, 27], [30, 32, 37], [40, 43, 49], [52, 55, 61], [66, 69, 74], [85, 87, 90], [110, 109, 108], [140, 136, 128]],
+  worn: [[30, 31, 36], [43, 44, 50], [58, 59, 64], [75, 76, 79], [95, 94, 94], [117, 115, 111], [142, 138, 130], [172, 165, 152]],
+  walnut: [[24, 14, 11], [36, 21, 15], [50, 30, 20], [66, 40, 26], [84, 52, 33], [102, 66, 42], [122, 82, 54], [146, 104, 72]],
+  beech: [[46, 30, 19], [66, 44, 28], [88, 60, 38], [110, 77, 49], [132, 96, 62], [154, 117, 79], [176, 140, 100]],
+  birch: [[38, 18, 12], [58, 29, 17], [80, 42, 24], [104, 57, 32], [128, 75, 43], [150, 96, 58], [172, 120, 78]],
+  bakelite: [[12, 8, 7], [20, 13, 11], [29, 19, 15], [40, 27, 21], [53, 36, 28], [68, 47, 36], [88, 64, 50]],
+  olive: [[26, 28, 22], [36, 39, 28], [47, 51, 35], [59, 63, 43], [72, 76, 52], [88, 91, 63], [108, 110, 80]],
+  brass: [[46, 36, 22], [70, 55, 32], [96, 76, 42], [122, 98, 54], [148, 122, 70], [174, 147, 90], [198, 172, 116], [222, 202, 156]],
+  copper: [[46, 18, 11], [72, 30, 16], [102, 45, 23], [130, 63, 32], [158, 85, 46], [184, 112, 66], [206, 140, 92]],
+  skin: [[62, 42, 36], [88, 60, 48], [114, 81, 63], [140, 103, 80], [164, 125, 98], [186, 148, 118], [206, 172, 142]],
+  grime: [[36, 30, 26], [52, 44, 36], [70, 60, 48], [92, 80, 63]],
+  wool: [[30, 32, 28], [40, 44, 34], [52, 56, 40], [64, 68, 48], [76, 80, 55], [90, 94, 64], [108, 112, 78], [134, 136, 96]],
+  webbing: [[36, 40, 35], [50, 55, 43], [65, 71, 54], [82, 88, 66], [102, 107, 80], [126, 128, 98]],
+  pgreen: [[64, 84, 16], [96, 124, 28], [132, 162, 46], [168, 196, 70], [200, 222, 104], [228, 240, 150]],
+  pgold: [[92, 60, 10], [134, 94, 22], [176, 132, 36], [210, 168, 62], [234, 202, 104], [250, 230, 156]],
+};
+
+// fn(i, x, y) -> [ramp, value 0..1]; values snap to the ramp's entries.
+function paintPage(w, h, fn) {
+  const data = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      const [ramp, v] = fn(i, x, y);
+      const c = ramp[Math.max(0, Math.min(ramp.length - 1, Math.round(v * (ramp.length - 1))))];
+      data[i * 4] = c[0];
+      data[i * 4 + 1] = c[1];
+      data[i * 4 + 2] = c[2];
+      data[i * 4 + 3] = 255;
+    }
+  }
+  const t = new THREE.DataTexture(data, w, h, THREE.RGBAFormat);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.magFilter = THREE.NearestFilter;
+  t.minFilter = THREE.NearestMipmapLinearFilter;
+  t.generateMipmaps = true;
+  t.needsUpdate = true;
+  return t;
+}
+
+// Short straight marks (scratches, stitches) into a wrap-around mask.
+function marks(W, H, r, count, minLen, maxLen, slope = 0) {
+  const m = new Uint8Array(W * H);
+  for (let k = 0; k < count; k++) {
+    const x = Math.floor(r() * W);
+    const y = Math.floor(r() * H);
+    const len = minLen + Math.floor(r() * (maxLen - minLen));
+    const s = slope && r() < 0.4 ? slope : 0;
+    for (let j = 0; j < len; j++) m[((y + Math.floor(j * s)) % H) * W + ((x + j) % W)] = 1;
+  }
+  return m;
+}
+
+function paintSteel(ramp, seed, base, wear) {
+  const W = 64;
+  const H = 64;
+  const r = mulberry32(seed);
+  const n16 = noise(W, H, 16, 16, r);
+  const brush = noise(W, H, 64, 1, r); // one value per row: long brushed lines
+  const n6 = noise(W, H, 6, 4, r);
+  const pit = noise(W, H, 3, 3, r);
+  const scr = marks(W, H, r, 6, 5, 14, 0.25);
+  return paintPage(W, H, (i) => {
+    let v = base + 0.07 * (n16[i] - 0.5) + 0.14 * (brush[i] - 0.5);
+    if (n6[i] > 1 - wear) v += 0.1; // rubbed-bright streaks
+    if (pit[i] < 0.08) v -= 0.14; // pitting and dirt
+    if (scr[i]) v += 0.24;
+    return [ramp, v];
+  });
+}
+
+function paintWood(ramp, seed) {
+  const W = 128;
+  const H = 64;
+  const r = mulberry32(seed);
+  const warp = noise(W, H, 64, 10, r);
+  const tone = noise(W, H, 32, 16, r);
+  const fig = noise(W, H, 16, 4, r);
+  const wear = noise(W, H, 16, 16, r);
+  const spacing = H / 11;
+  const kx = r() * W;
+  const ky = r() * H;
+  return paintPage(W, H, (i, x, y) => {
+    let dx = x - kx;
+    dx -= Math.round(dx / W) * W;
+    let dy = y - ky;
+    dy -= Math.round(dy / H) * H;
+    const kd = Math.hypot(dx * 0.45, dy);
+    const yy = y + warp[i] * 10 + (kd < 7 ? (7 - kd) * Math.sign(dy || 1) * 0.7 : 0);
+    const g = (((yy / spacing) % 1) + 1) % 1;
+    let v = 0.46 + 0.16 * (tone[i] - 0.5) + 0.08 * (fig[i] - 0.5);
+    if (g < 0.2) v -= 0.16; // dark late-wood line
+    else if (g > 0.55 && g < 0.72) v += 0.06;
+    if (wear[i] > 0.82) v += 0.09; // hand-polished
+    if (kd < 2.2) v -= 0.25; // knot
+    return [ramp, v];
+  });
+}
+
+function paintBakelite(seed) {
+  const W = 64;
+  const H = 64;
+  const r = mulberry32(seed);
+  const n8 = noise(W, H, 8, 8, r);
+  const n4 = noise(W, H, 4, 6, r);
+  const n16 = noise(W, H, 16, 16, r);
+  return paintPage(W, H, (i) => {
+    let v = 0.42 + 0.14 * (n8[i] - 0.5) + 0.1 * (n4[i] - 0.5);
+    if (n16[i] > 0.8) v += 0.12;
+    return [RAMP.bakelite, v];
+  });
+}
+
+function paintOlive(seed) {
+  const W = 64;
+  const H = 64;
+  const r = mulberry32(seed);
+  const n16 = noise(W, H, 16, 16, r);
+  const brush = noise(W, H, 16, 2, r);
+  const chip = noise(W, H, 3, 3, r);
+  const scr = marks(W, H, r, 4, 3, 8, 0.5);
+  return paintPage(W, H, (i) => {
+    if (chip[i] > 0.9 || scr[i]) return [RAMP.blued, 0.4]; // chipped to bare steel
+    let v = 0.52 + 0.08 * (n16[i] - 0.5) + 0.08 * (brush[i] - 0.5);
+    if (chip[i] > 0.84) v += 0.15; // raised paint lip around a chip
+    return [RAMP.olive, v];
+  });
+}
+
+function paintBrass(ramp, seed) {
+  const W = 64;
+  const H = 64;
+  const r = mulberry32(seed);
+  const n16 = noise(W, H, 16, 16, r);
+  const streak = noise(W, H, 32, 4, r);
+  const n8 = noise(W, H, 8, 8, r);
+  const n6 = noise(W, H, 6, 6, r);
+  return paintPage(W, H, (i) => {
+    let v = 0.56 + 0.1 * (n16[i] - 0.5) + 0.1 * (streak[i] - 0.5);
+    if (n8[i] > 0.74) v -= 0.15; // tarnish
+    if (n6[i] < 0.12) v += 0.2; // polished glint
+    return [ramp, v];
+  });
+}
+
+function paintSkin(seed, grime) {
+  const W = 64;
+  const H = 64;
+  const r = mulberry32(seed);
+  const n16 = noise(W, H, 16, 16, r);
+  const n8 = noise(W, H, 8, 8, r);
+  const n4 = noise(W, H, 4, 4, r);
+  const crease = marks(W, H, r, 6, 3, 7, 0.34);
+  return paintPage(W, H, (i) => {
+    const gr = 0.6 * n8[i] + 0.4 * n16[i];
+    if (gr > 1 - grime) return [RAMP.grime, 0.3 + 0.5 * n4[i]];
+    let v = 0.54 + 0.16 * (n16[i] - 0.5) + 0.08 * (n4[i] - 0.5);
+    if (crease[i]) v -= 0.2;
+    return [RAMP.skin, v];
+  });
+}
+
+function paintCloth(ramp, seed, stitch) {
+  const W = 64;
+  const H = 64;
+  const r = mulberry32(seed);
+  const n16 = noise(W, H, 16, 16, r);
+  const warp = noise(W, H, 32, 16, r);
+  const mud = noise(W, H, 8, 8, r);
+  return paintPage(W, H, (i, x, y) => {
+    let v = 0.5 + 0.16 * (n16[i] - 0.5);
+    if (((x + y) >> 1) % 3 === 0) v -= 0.07; // twill
+    const f = Math.sin(((y + warp[i] * 12) / H) * TAU * 2);
+    if (f > 0.86) v += 0.14; // fold crest
+    else if (f < -0.8) v -= 0.16; // fold crease
+    if (stitch && y % 16 === 3 && x % 4 < 2) v += 0.3;
+    if (mud[i] > 0.8) return [RAMP.grime, 0.45 + 0.3 * n16[i]];
+    return [ramp, v];
+  });
+}
+
+function paintGlow(ramp, seed) {
+  const W = 32;
+  const H = 32;
+  const r = mulberry32(seed);
+  const n16 = noise(W, H, 16, 16, r);
+  const n6 = noise(W, H, 6, 6, r);
+  const n8 = noise(W, H, 8, 8, r);
+  return paintPage(W, H, (i) => {
+    let v = 0.6 + 0.2 * (n16[i] - 0.5) + 0.1 * (n6[i] - 0.5);
+    if (n8[i] > 0.78) v += 0.22;
+    return [ramp, v];
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Shared materials
 // ---------------------------------------------------------------------------
 
 let MATS = null;
+let TEX = null;
+
+// Per-material painted-light recipe: light = strength of the baked key/shadow
+// ramp, edge = brightening of bevelled chamfers (worn edges), ao = crease
+// darkening, texel = metres per texel (1997 density: ~1-2 screen px at hip).
+const P_STEEL = { light: 0.9, edge: 0.85, ao: 0.38, texel: 0.0025 };
+const P_WORN = { light: 0.85, edge: 0.6, ao: 0.34, texel: 0.0025 };
+const P_WOOD = { light: 0.8, edge: 0.18, ao: 0.34, texel: 0.0021 };
+const P_DARK = { light: 0.85, edge: 0.5, ao: 0.3, texel: 0.0025 };
+const P_BRASS = { light: 0.7, edge: 0.4, ao: 0.3, texel: 0.0022 };
+const P_SKIN = { light: 0.55, edge: 0, ao: 0.12, texel: 0.0018 };
+const P_CLOTH = { light: 0.65, edge: 0, ao: 0.2, texel: 0.0026 };
+const P_GLOW = { light: 0.5, edge: 0.3, ao: 0.15, texel: 0.012 };
+
+function textures() {
+  if (TEX) return TEX;
+  TEX = {
+    blued: paintSteel(RAMP.blued, 11, 0.42, 0.12),
+    worn: paintSteel(RAMP.worn, 23, 0.46, 0.14),
+    walnut: paintWood(RAMP.walnut, 37),
+    beech: paintWood(RAMP.beech, 41),
+    birch: paintWood(RAMP.birch, 43),
+    bakelite: paintBakelite(53),
+    olive: paintOlive(61),
+    brass: paintBrass(RAMP.brass, 71),
+    copper: paintBrass(RAMP.copper, 73),
+    skin: paintSkin(83, 0.2),
+    grimy: paintSkin(89, 0.52),
+    wool: paintCloth(RAMP.wool, 97, false),
+    cuff: paintCloth(RAMP.webbing, 101, true),
+    pgreen: paintGlow(RAMP.pgreen, 107),
+    pgold: paintGlow(RAMP.pgold, 109),
+  };
+  return TEX;
+}
 
 function mats() {
   if (MATS) return MATS;
-  const std = (name, chalk, color, roughness, metalness, extra = {}) => {
-    const m = new THREE.MeshStandardMaterial({ color, roughness, metalness, ...extra });
+  const T = textures();
+  const make = (Cls, name, chalk, paint, params) => {
+    const m = new Cls(params);
     m.name = name;
     m.userData.chalk = chalk;
+    m.userData.paint = paint;
     return m;
   };
-  const lam = (name, chalk, params) => {
-    const m = new THREE.MeshLambertMaterial(params);
-    m.name = name;
-    m.userData.chalk = chalk;
-    return m;
-  };
-  const basic = (name, chalk, params) => {
-    const m = new THREE.MeshBasicMaterial(params);
-    m.name = name;
-    m.userData.chalk = chalk;
-    return m;
-  };
+  // Metals: Phong with a low, broad specular so facets glint as the gun sways.
+  const metal = (name, chalk, map, paint, specular, shininess, extra = {}) => make(THREE.MeshPhongMaterial, name, chalk, paint, {
+    map, vertexColors: true, flatShading: true, specular, shininess, ...extra,
+  });
+  const matte = (name, chalk, map, paint, extra = {}) => make(THREE.MeshLambertMaterial, name, chalk, paint, {
+    map, vertexColors: true, flatShading: true, ...extra,
+  });
+  const basic = (name, chalk, params) => make(THREE.MeshBasicMaterial, name, chalk, null, params);
   MATS = {
-    steel: std('bluedSteel', 'metal', 0x353a42, 0.42, 0.55),
-    worn: std('wornSteel', 'metal', 0x74767a, 0.46, 0.6),
-    wood: std('walnut', 'wood', 0x58311b, 0.55, 0.0),
-    woodLight: std('lightWood', 'wood', 0x94643a, 0.65, 0.0),
-    bakelite: std('bakelite', 'dark', 0x2a1c15, 0.42, 0.0),
-    olive: std('olivePaint', 'metal', 0x4d5428, 0.7, 0.15),
-    oliveDS: std('olivePaintDS', 'metal', 0x4d5428, 0.7, 0.15, { side: THREE.DoubleSide }),
-    brass: std('brass', 'metal', 0xb08a38, 0.32, 0.75),
-    copper: std('copper', 'metal', 0xa4582c, 0.36, 0.7),
-    black: std('blackHole', 'hole', 0x060606, 0.9, 0.0),
-    glass: std('glass', 'glass', 0xa8fff0, 0.08, 0.1, {
-      transparent: true, opacity: 0.32, emissive: 0x1f7a66, emissiveIntensity: 0.7, depthWrite: false,
+    steel: metal('bluedSteel', 'metal', T.blued, P_STEEL, 0x383c44, 14),
+    worn: metal('wornSteel', 'metal', T.worn, P_WORN, 0x454545, 18),
+    wood: matte('walnut', 'wood', T.walnut, P_WOOD),
+    woodLight: matte('lightWood', 'wood', T.beech, P_WOOD),
+    woodRed: matte('birchStock', 'wood', T.birch, P_WOOD),
+    bakelite: metal('bakelite', 'dark', T.bakelite, P_DARK, 0x201a16, 22),
+    olive: matte('olivePaint', 'metal', T.olive, P_WORN),
+    oliveDS: matte('olivePaintDS', 'metal', T.olive, P_WORN, { side: THREE.DoubleSide }),
+    brass: metal('brass', 'metal', T.brass, P_BRASS, 0x5a4420, 16),
+    copper: metal('copper', 'metal', T.copper, P_BRASS, 0x4a2a1c, 14),
+    black: basic('blackHole', 'hole', { color: 0x060606 }),
+    glass: make(THREE.MeshPhongMaterial, 'glass', 'glass', null, {
+      color: 0xa8fff0, transparent: true, opacity: 0.32, emissive: 0x1f7a66, emissiveIntensity: 0.7, depthWrite: false,
+      specular: 0x2a4a44, shininess: 60, flatShading: true,
     }),
     glow: basic('glow', 'glow', { color: 0x74ffd8 }),
     glowSoft: basic('glowSoft', 'glow', {
       color: 0x3de8b8, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false,
     }),
     // hands
-    skin: lam('handSkin', 'skin', { color: 0xc1906f }),
-    sleeve: lam('sleeveOD', 'cloth', { color: 0x4b5030 }),
-    cuff: lam('sleeveCuff', 'cloth', { color: 0x5b6039 }),
-    // power-ups
-    pBody: lam('powerBody', 'glow', { color: 0xb9cc52, emissive: 0x6f8f16, emissiveIntensity: 1.0 }),
-    pGold: lam('powerGold', 'glow', { color: 0xe6c85a, emissive: 0x9a7c12, emissiveIntensity: 1.0 }),
+    skin: matte('handSkin', 'skin', T.skin, P_SKIN),
+    grime: matte('handGrime', 'skin', T.grimy, P_SKIN),
+    sleeve: matte('sleeveOD', 'cloth', T.wool, P_CLOTH),
+    cuff: matte('sleeveCuff', 'cloth', T.cuff, P_CLOTH),
+    // power-ups: painted, lit, and glowing through their own page
+    pBody: matte('powerBody', 'glow', T.pgreen, P_GLOW, { emissive: 0x8fb02a, emissiveIntensity: 0.75, emissiveMap: T.pgreen }),
+    pGold: matte('powerGold', 'glow', T.pgold, P_GLOW, { emissive: 0xc09a30, emissiveIntensity: 0.75, emissiveMap: T.pgold }),
     pBright: basic('powerBright', 'glow', { color: 0xeeffa0 }),
     pDark: basic('powerDark', 'dark', { color: 0x141b08 }),
   };
@@ -76,7 +362,7 @@ function mats() {
 }
 
 // ---------------------------------------------------------------------------
-// Cached primitive geometry
+// Cached primitive geometry (faceted: few sides, a flat on top of every barrel)
 // ---------------------------------------------------------------------------
 
 const GEO = new Map();
@@ -88,13 +374,75 @@ function cached(key, make) {
   }
   return g;
 }
+
+const sidesFor = (r, seg) => Math.max(3, Math.min(seg, r >= 0.04 ? 10 : r >= 0.014 ? 8 : 6));
+
+/**
+ * Box with its four long edges bevelled (an octagonal prism along the longest
+ * axis). Chamfer faces carry an `edge` attribute so they bake as worn edges.
+ */
+function chamferBox(w, h, d, c) {
+  const dims = [w, h, d];
+  let L = 0;
+  if (dims[1] > dims[L]) L = 1;
+  if (dims[2] > dims[L]) L = 2;
+  const A = (L + 1) % 3;
+  const Bx = (L + 2) % 3;
+  const ha = dims[A] / 2;
+  const hb = dims[Bx] / 2;
+  const hl = dims[L] / 2;
+  const oct = [[ha, hb - c], [ha - c, hb], [-ha + c, hb], [-ha, hb - c], [-ha, -hb + c], [-ha + c, -hb], [ha - c, -hb], [ha, -hb + c]];
+  const P = (ab, l) => {
+    const v = [0, 0, 0];
+    v[A] = ab[0];
+    v[Bx] = ab[1];
+    v[L] = l;
+    return v;
+  };
+  const pos = [];
+  const edge = [];
+  const tri = (p, q, s, e) => {
+    const u = [q[0] - p[0], q[1] - p[1], q[2] - p[2]];
+    const v = [s[0] - p[0], s[1] - p[1], s[2] - p[2]];
+    const n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+    const out = n[0] * (p[0] + q[0] + s[0]) + n[1] * (p[1] + q[1] + s[1]) + n[2] * (p[2] + q[2] + s[2]);
+    if (out < 0) pos.push(...p, ...s, ...q);
+    else pos.push(...p, ...q, ...s);
+    edge.push(e, e, e);
+  };
+  for (let i = 0; i < 8; i++) {
+    const a = oct[i];
+    const b = oct[(i + 1) % 8];
+    const e = i % 2 === 0 ? 1 : 0;
+    tri(P(a, -hl), P(b, -hl), P(b, hl), e);
+    tri(P(a, -hl), P(b, hl), P(a, hl), e);
+  }
+  for (const l of [-hl, hl]) for (let i = 1; i < 7; i++) tri(P(oct[0], l), P(oct[i], l), P(oct[i + 1], l), 0);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('edge', new THREE.Float32BufferAttribute(edge, 1));
+  return g;
+}
+
 const G = {
   box: (w, h, d) => cached(`b${w},${h},${d}`, () => new THREE.BoxGeometry(w, h, d)),
-  cyl: (rt, rb, h, seg = 10, open = false) =>
-    cached(`c${rt},${rb},${h},${seg},${open}`, () => new THREE.CylinderGeometry(rt, rb, h, seg, 1, open)),
-  tor: (R, r, arc = TAU, rs = 6, ts = 12) =>
-    cached(`t${R},${r},${arc},${rs},${ts}`, () => new THREE.TorusGeometry(R, r, rs, ts, arc)),
-  sph: (r, ws = 10, hs = 8) => cached(`s${r},${ws},${hs}`, () => new THREE.SphereGeometry(r, ws, hs)),
+  cbox: (w, h, d, c) => cached(`cb${w},${h},${d},${c}`, () => chamferBox(w, h, d, c)),
+  cyl: (rt, rb, h, seg = 10, open = false) => {
+    const n = sidesFor(Math.max(rt, rb), seg);
+    return cached(`c${rt},${rb},${h},${n},${open}`, () => new THREE.CylinderGeometry(rt, rb, h, n, 1, open, PI / n));
+  },
+  tor: (R, r, arc = TAU, rs = 6, ts = 12) => {
+    const a = Math.min(rs, 5);
+    const b = Math.min(ts, arc >= TAU - 1e-6 ? 10 : 6);
+    return cached(`t${R},${r},${arc},${a},${b}`, () => new THREE.TorusGeometry(R, r, a, b, arc));
+  },
+  sph: (r, ws = 10, hs = 8) => {
+    const a = Math.min(ws, r < 0.012 ? 6 : 8);
+    const b = Math.min(hs, r < 0.012 ? 4 : 6);
+    return cached(`s${r},${a},${b}`, () => new THREE.SphereGeometry(r, a, b));
+  },
+  // flat hexagonal disc facing +Y (perforations, gauge faces)
+  hex: (r) => cached(`h${r}`, () => new THREE.CircleGeometry(r, 6).rotateX(-HALF)),
 };
 
 function shapeFrom(pts) {
@@ -172,8 +520,13 @@ class Builder {
     return this.addMatrix(geom, mat, m);
   }
 
+  /** Box; chunky boxes get their long edges bevelled (worn chamfers). */
   bx(mat, w, h, d, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0) {
-    return this.add(G.box(w, h, d), mat, x, y, z, rx, ry, rz);
+    const s = [w, h, d].sort((a, b) => a - b);
+    const geo = mat.userData.paint && s[0] >= 0.009 && s[1] >= 0.014
+      ? G.cbox(w, h, d, Math.min(0.0055, s[0] * 0.22))
+      : G.box(w, h, d);
+    return this.add(geo, mat, x, y, z, rx, ry, rz);
   }
 
   /** Cylinder along Z from zF (front, more negative) to zB; sx/sy squash the section. */
@@ -212,9 +565,10 @@ class Builder {
 
   /**
    * Side profile extruded across X. Shape coordinates are (u, v) with
-   * u = -z (forward positive) and v = y. Centred on x.
+   * u = -z (forward positive) and v = y. Centred on x. The single-step bevel
+   * gives the profile hard chamfered edges.
    */
-  ext(mat, shape, depth, x = 0, bevel = 0.003, curveSegments = 4) {
+  ext(mat, shape, depth, x = 0, bevel = 0.003, curveSegments = 3) {
     const geo = new THREE.ExtrudeGeometry(shape, {
       depth,
       bevelEnabled: bevel > 0,
@@ -234,8 +588,6 @@ class Builder {
   }
 }
 
-const KEEP_ATTRS = new Set(['position', 'normal', 'uv']);
-
 function flipWinding(g) {
   for (const name of Object.keys(g.attributes)) {
     const a = g.attributes[name];
@@ -254,20 +606,141 @@ function flipWinding(g) {
   }
 }
 
-function bake(items) {
+// ---------------------------------------------------------------------------
+// Baking: planar UVs at a fixed texel density + painted light in vertex colours
+// ---------------------------------------------------------------------------
+
+// Key from above and slightly in front, leaning to the side the player sees.
+const KEY = new THREE.Vector3(-0.3, 1, -0.25).normalize();
+// Hue-shifted light ramp: cool shadow -> neutral -> warm highlight.
+const LIGHT_STOPS = [
+  [0.0, 0.42, 0.45, 0.55],
+  [0.42, 0.74, 0.75, 0.79],
+  [0.72, 1.0, 0.98, 0.95],
+  [1.0, 1.2, 1.12, 1.0],
+];
+
+function lightColor(n, paint, out) {
+  const t = 0.5 + 0.5 * n.dot(KEY);
+  let i = 1;
+  while (i < LIGHT_STOPS.length - 1 && t > LIGHT_STOPS[i][0]) i++;
+  const a = LIGHT_STOPS[i - 1];
+  const b = LIGHT_STOPS[i];
+  const u = Math.max(0, Math.min(1, (t - a[0]) / (b[0] - a[0])));
+  let r = a[1] + (b[1] - a[1]) * u;
+  let g = a[2] + (b[2] - a[2]) * u;
+  let bl = a[3] + (b[3] - a[3]) * u;
+  if (n.y < 0) { // faint warm bounce from below
+    r += 0.1 * -n.y;
+    g += 0.06 * -n.y;
+    bl += 0.03 * -n.y;
+  }
+  const s = paint.light;
+  out[0] = 0.9 + (r - 0.9) * s;
+  out[1] = 0.9 + (g - 0.9) * s;
+  out[2] = 0.9 + (bl - 0.9) * s;
+  return out;
+}
+
+const _t = new THREE.Vector3();
+const _q = new THREE.Quaternion();
+const _s = new THREE.Vector3();
+const _n = new THREE.Vector3();
+const _p = new THREE.Vector3();
+const _box = new THREE.Box3();
+const _lc = [0, 0, 0];
+
+function bake(items, seed = 1) {
+  const rnd = mulberry32(seed);
+  // Part-space boxes of solid primitives: a vertex nudged outward that lands
+  // inside another primitive sits in a crease and gets occlusion painted in.
+  const occ = items.map(({ geom, mat, m }) => {
+    if (!mat.userData.paint || mat.transparent) return null;
+    if (!geom.boundingBox) geom.computeBoundingBox();
+    return geom.boundingBox.clone().applyMatrix4(m);
+  });
   const byMat = new Map();
-  for (const { geom, mat, m } of items) {
+  items.forEach(({ geom, mat, m }, k) => {
     const g = geom.index ? geom.toNonIndexed() : geom.clone();
-    for (const name of Object.keys(g.attributes)) if (!KEEP_ATTRS.has(name)) g.deleteAttribute(name);
-    if (!g.attributes.uv) g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
-    if (!g.attributes.normal) g.computeVertexNormals();
+    for (const name of Object.keys(g.attributes)) if (name !== 'position' && name !== 'edge') g.deleteAttribute(name);
     g.morphAttributes = {};
     g.clearGroups();
+    const pos = g.attributes.position;
+    const n = pos.count;
+    const paint = mat.userData.paint;
+    const uv = new Float32Array(n * 2);
+    const ou = rnd();
+    const ov = rnd();
+    const tint = 1 + (rnd() - 0.5) * 0.1;
+    if (paint && mat.map) {
+      // Primitive-local metric frame; the longest extent carries the grain (u).
+      m.decompose(_t, _q, _s);
+      const sc = [_s.x, _s.y, _s.z];
+      const lp = new Float32Array(n * 3);
+      _box.makeEmpty();
+      for (let i = 0; i < n; i++) {
+        for (let a = 0; a < 3; a++) lp[i * 3 + a] = pos.array[i * 3 + a] * sc[a];
+        _box.expandByPoint(_p.fromArray(lp, i * 3));
+      }
+      const ext = [_box.max.x - _box.min.x, _box.max.y - _box.min.y, _box.max.z - _box.min.z];
+      const ax = [0, 1, 2].sort((i, j) => ext[j] - ext[i]);
+      const img = mat.map.image;
+      const su = 1 / (img.width * paint.texel);
+      const sv = 1 / (img.height * paint.texel);
+      for (let f = 0; f < n; f += 3) {
+        const o = f * 3;
+        const ux = lp[o + 3] - lp[o];
+        const uy = lp[o + 4] - lp[o + 1];
+        const uz = lp[o + 5] - lp[o + 2];
+        const vx = lp[o + 6] - lp[o];
+        const vy = lp[o + 7] - lp[o + 1];
+        const vz = lp[o + 8] - lp[o + 2];
+        const nn = [Math.abs(uy * vz - uz * vy), Math.abs(uz * vx - ux * vz), Math.abs(ux * vy - uy * vx)];
+        const dom = nn[0] >= nn[1] && nn[0] >= nn[2] ? 0 : nn[1] >= nn[2] ? 1 : 2;
+        let uA;
+        let vA;
+        if (dom === ax[0]) { uA = ax[1]; vA = ax[2]; } else { uA = ax[0]; vA = dom === ax[1] ? ax[2] : ax[1]; }
+        for (let j = 0; j < 3; j++) {
+          uv[(f + j) * 2] = lp[o + j * 3 + uA] * su + ou;
+          uv[(f + j) * 2 + 1] = lp[o + j * 3 + vA] * sv + ov;
+        }
+      }
+    }
+    g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     g.applyMatrix4(m);
     if (m.determinant() < 0) flipWinding(g);
+    g.computeVertexNormals(); // non-indexed: one hard normal per triangle
+    const col = new Float32Array(n * 3).fill(1);
+    if (paint) {
+      const nrm = g.attributes.normal;
+      const edge = g.attributes.edge;
+      for (let f = 0; f < n; f += 3) {
+        _n.fromBufferAttribute(nrm, f);
+        lightColor(_n, paint, _lc);
+        const e = edge ? edge.getX(f) * paint.edge : 0;
+        const r0 = _lc[0] * (1 + e) * tint;
+        const g0 = _lc[1] * (1 + e * 0.9) * tint;
+        const b0 = _lc[2] * (1 + e * 0.75) * tint;
+        for (let j = 0; j < 3; j++) {
+          _p.fromBufferAttribute(g.attributes.position, f + j).addScaledVector(_n, 0.005);
+          let ao = 1;
+          if (paint.ao) {
+            for (let o = 0; o < occ.length; o++) {
+              if (o !== k && occ[o] && occ[o].containsPoint(_p)) { ao = 1 - paint.ao; break; }
+            }
+          }
+          const i3 = (f + j) * 3;
+          col[i3] = r0 * ao;
+          col[i3 + 1] = g0 * ao;
+          col[i3 + 2] = b0 * (ao + (1 - ao) * 0.3); // occlusion stays cool
+        }
+      }
+    }
+    if (g.attributes.edge) g.deleteAttribute('edge');
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
     if (!byMat.has(mat)) byMat.set(mat, []);
     byMat.get(mat).push(g);
-  }
+  });
   const out = [];
   for (const [material, list] of byMat) {
     const geometry = list.length === 1 ? list[0] : mergeGeometries(list, false);
@@ -281,8 +754,10 @@ function bake(items) {
 
 function finalize(B, id, length) {
   const parts = [];
+  let seed = 7;
+  for (const ch of id) seed = Math.imul(seed ^ ch.charCodeAt(0), 16777619) >>> 0;
   for (const [name, p] of B.parts) {
-    parts.push({ name, pos: p.pos.clone(), rot: p.rot.clone(), meshes: bake(p.items), userData: { ...p.userData } });
+    parts.push({ name, pos: p.pos.clone(), rot: p.rot.clone(), meshes: bake(p.items, seed++), userData: { ...p.userData } });
   }
   return { id, parts, anchors: { ...B.anchors }, length };
 }
@@ -336,26 +811,26 @@ function instantiate(bp) {
 
 /** U-shaped trigger guard hanging below (y, z) plus a trigger blade. */
 function triggerGuard(B, mat, y, z, R = 0.016, trigMat = mat) {
-  B.tor(mat, R, 0.0024, PI, 0, y, z, 0, HALF, PI, 5, 10);
+  B.tor(mat, R, 0.0026, PI, 0, y, z, 0, HALF, PI, 4, 6);
   B.bx(trigMat, 0.005, R * 0.95, 0.004, 0, y - R * 0.45, z + R * 0.12, 0.3);
 }
 
 /** Row(s) of dark holes on a Z-axis cylinder surface. angles: 0 = top, +x side positive. */
 function perforate(B, r, y, z0, z1, n, angles, holeR, stretch = 1.6, x = 0) {
   const M = mats();
-  const g = G.cyl(holeR, holeR, 0.0025, 8);
+  const g = G.hex(holeR);
   for (const th of angles) {
     for (let i = 0; i < n; i++) {
       const z = z0 + ((i + 0.5) * (z1 - z0)) / n;
-      B.add(g, M.black, x + (r + 0.0006) * Math.sin(th), y + (r + 0.0006) * Math.cos(th), z, 0, 0, -th, 1, 1, stretch);
+      B.add(g, M.black, x + (r + 0.0008) * Math.sin(th), y + (r + 0.0008) * Math.cos(th), z, 0, 0, -th, 1, 1, stretch);
     }
   }
 }
 
 function frontPost(B, z, yBase, yTop, hoodR = 0) {
   const M = mats();
-  B.bx(M.steel, 0.0024, yTop - yBase, 0.003, 0, (yBase + yTop) / 2, z);
-  if (hoodR) B.tor(M.steel, hoodR, 0.0016, PI, 0, yBase, z, 0, 0, 0, 4, 8);
+  B.bx(M.steel, 0.0026, yTop - yBase, 0.003, 0, (yBase + yTop) / 2, z);
+  if (hoodR) B.tor(M.steel, hoodR, 0.0018, PI, 0, yBase, z, 0, 0, 0, 4, 6);
 }
 
 function buttPlate(B, mat, h, y, z, w = 0.044) {
@@ -447,7 +922,7 @@ function kar98k(B, M) {
 }
 
 function m1carbine(B, M) {
-  B.ext(M.wood, shapeFrom([
+  B.ext(M.woodLight, shapeFrom([
     [0.36, 0.034], [0.1, 0.034], [0.02, 0.028], [-0.03, 0.02], [-0.1, 0.026], [-0.3, 0.034],
     [-0.306, 0.028], [-0.31, -0.03], [-0.305, -0.098], [-0.27, -0.098], [-0.06, -0.032],
     [0.0, -0.026], [0.16, -0.014], [0.34, 0.008], [0.365, 0.02],
@@ -460,7 +935,7 @@ function m1carbine(B, M) {
   B.bx(M.steel, 0.016, 0.014, 0.012, 0, 0.064, 0.04);
   B.tor(M.steel, 0.0045, 0.0016, TAU, 0, 0.0745, 0.04, 0, 0, 0, 4, 10);
   // handguard, barrel, band, front sight
-  B.bx(M.wood, 0.03, 0.016, 0.23, 0, 0.053, -0.225);
+  B.bx(M.woodLight, 0.03, 0.016, 0.23, 0, 0.053, -0.225);
   B.tz(M.steel, 0.0085, 0.0095, -0.605, -0.11, 0, 0.042, 10);
   B.tz(M.black, 0.0045, 0.0045, -0.6058, -0.6, 0, 0.042, 8);
   B.bx(M.steel, 0.038, 0.04, 0.02, 0, 0.038, -0.35);
@@ -658,7 +1133,7 @@ function trenchGun(B, M) {
   // slide-action fore-end
   B.part('pump', [0, 0.016, -0.3]);
   B.tz(M.wood, 0.021, 0.021, -0.1, 0.06, 0, 0, 10);
-  for (let i = 0; i < 8; i++) B.tor(M.wood, 0.021, 0.0022, TAU, 0, 0, -0.088 + i * 0.019, 0, 0, 0, 4, 12);
+  for (let i = 0; i < 8; i++) B.tor(M.wood, 0.0212, 0.0024, TAU, 0, 0, -0.088 + i * 0.019, 0, 0, 0, 3, 8);
   B.sel();
   B.anchor('muzzle', 0, 0.045, -0.706);
   B.anchor('sight', 0, 0.074, -0.035);
@@ -784,7 +1259,7 @@ function ppsh(B, M) {
   B.bx(M.steel, 0.004, 0.006, 0.006, -0.005, 0.084, -0.05);
   B.bx(M.steel, 0.004, 0.006, 0.006, 0.005, 0.084, -0.05);
   // wooden stock
-  B.ext(M.wood, shapeFrom([
+  B.ext(M.woodRed, shapeFrom([
     [0.175, 0.03], [0.03, 0.028], [-0.02, 0.022], [-0.1, 0.032], [-0.38, 0.044], [-0.386, 0.038],
     [-0.388, -0.03], [-0.382, -0.105], [-0.345, -0.105], [-0.06, -0.034], [0.0, -0.026],
     [0.03, -0.012], [0.175, 0.008], [0.185, 0.02],
@@ -825,10 +1300,10 @@ function mg42(B, M) {
   // perforated barrel jacket
   B.bx(M.steel, 0.046, 0.05, 0.5, 0, 0.06, -0.51);
   for (const y of [0.05, 0.07]) {
-    for (let i = 0; i < 7; i++) B.tx(M.black, 0.0068, 0.002, -0.0232, y, -0.3 - i * 0.058, 10, 1, 1.9);
+    for (let i = 0; i < 7; i++) B.add(G.hex(0.0068), M.black, -0.0238, y, -0.3 - i * 0.058, 0, 0, HALF, 1, 1, 1.9);
   }
   B.bx(M.black, 0.002, 0.024, 0.34, 0.0232, 0.06, -0.52);
-  for (let i = 0; i < 8; i++) B.cy(M.black, 0.005, 0.005, 0.002, 0, 0.0852, -0.3 - i * 0.055, 0, 0, 0, 8);
+  for (let i = 0; i < 8; i++) B.add(G.hex(0.005), M.black, 0, 0.0856, -0.3 - i * 0.055);
   // muzzle booster
   B.tz(M.steel, 0.024, 0.026, -0.8, -0.76, 0, 0.06, 12);
   B.tz(M.steel, 0.018, 0.022, -0.84, -0.8, 0, 0.06, 12);
@@ -928,22 +1403,22 @@ function arcPistol(B, M) {
   triggerGuard(B, M.brass, 0.013, -0.04, 0.016, M.copper);
   // lathe-turned brass body
   const prof = [[0.0, 0], [0.018, 0], [0.026, 0.012], [0.034, 0.035], [0.036, 0.07], [0.033, 0.11], [0.026, 0.14], [0.024, 0.16], [0, 0.16]];
-  const lathe = new THREE.LatheGeometry(prof.map(([r, y]) => new THREE.Vector2(r, y)), 14);
+  const lathe = new THREE.LatheGeometry(prof.map(([r, y]) => new THREE.Vector2(r, y)), 8);
   B.add(lathe, M.brass, 0, 0.065, 0.065, -HALF, 0, 0);
-  for (let i = 0; i < 4; i++) B.tor(M.copper, 0.03 + i * 0.0015, 0.0026, TAU, 0, 0.065, 0.05 - i * 0.009, 0, 0, 0, 4, 16);
+  for (let i = 0; i < 3; i++) B.tor(M.copper, 0.03 + i * 0.002, 0.003, TAU, 0, 0.065, 0.048 - i * 0.012, 0, 0, 0, 4, 8);
   B.tor(M.copper, 0.037, 0.003, TAU, 0, 0.065, -0.02, 0, 0, 0, 4, 16);
   // glass coil chamber
   B.tz(M.glass, 0.024, 0.024, -0.19, -0.095, 0, 0.065, 14);
-  B.tor(M.brass, 0.025, 0.005, TAU, 0, 0.065, -0.095, 0, 0, 0, 6, 16);
-  B.tor(M.brass, 0.025, 0.005, TAU, 0, 0.065, -0.19, 0, 0, 0, 6, 16);
-  B.add(new THREE.TubeGeometry(new HelixCurve(0.0155, 6, -0.1, -0.185), 96, 0.0022, 5, false), M.glow, 0, 0.065, 0);
+  B.tor(M.brass, 0.025, 0.005, TAU, 0, 0.065, -0.095, 0, 0, 0, 4, 8);
+  B.tor(M.brass, 0.025, 0.005, TAU, 0, 0.065, -0.19, 0, 0, 0, 4, 8);
+  B.add(new THREE.TubeGeometry(new HelixCurve(0.0155, 6, -0.1, -0.185), 36, 0.0028, 3, false), M.glow, 0, 0.065, 0);
   B.tz(M.copper, 0.004, 0.004, -0.19, -0.095, 0, 0.065, 6);
   for (const s of [-1, 1]) B.tz(M.brass, 0.003, 0.003, -0.25, -0.09, s * 0.024, 0.045, 6);
   // emitter rings and prongs
   const rings = [[-0.205, 0.03], [-0.226, 0.025], [-0.245, 0.02]];
   for (const [z, R] of rings) {
-    B.tor(M.copper, R, 0.0042, TAU, 0, 0.065, z, 0, 0, 0, 6, 18);
-    B.tor(M.glow, R - 0.0045, 0.0014, TAU, 0, 0.065, z, 0, 0, 0, 4, 18);
+    B.tor(M.copper, R, 0.0042, TAU, 0, 0.065, z, 0, 0, 0, 4, 8);
+    B.tor(M.glow, R - 0.0045, 0.0016, TAU, 0, 0.065, z, 0, 0, 0, 3, 8);
   }
   for (let k = 0; k < 3; k++) {
     const a = HALF + (k * TAU) / 3;
@@ -957,7 +1432,7 @@ function arcPistol(B, M) {
   B.cy(M.glow, 0.0025, 0.0025, 0.018, 0.022, 0.118, -0.01, 0, 0, 0, 6);
   // pressure gauge on the left
   B.tx(M.brass, 0.014, 0.01, -0.036, 0.07, 0.02, 14);
-  B.tx(M.glowSoft, 0.011, 0.002, -0.0415, 0.07, 0.02, 14);
+  B.add(G.hex(0.011), M.glowSoft, -0.0412, 0.07, 0.02, 0, 0, HALF);
   B.bx(M.black, 0.001, 0.009, 0.0015, -0.0428, 0.073, 0.018, 0.6);
   // sights
   B.bx(M.brass, 0.018, 0.01, 0.01, 0, 0.1, 0.05);
@@ -1033,7 +1508,7 @@ function handBP(side) {
   const M = mats();
   // Built as a right hand: grip channel along Y through the origin, palm on
   // the +X side, fingers wrapping around the front (-Z) to the left side.
-  // rounded back of the hand / palm mass (hides the finger roots)
+  // faceted back of the hand / palm mass (hides the finger roots); grimy knuckles
   B.sp(M.skin, 1, 0.021, 0.0, 0.017, 0.0175, 0.045, 0.041, 12, 10);
   B.sp(M.skin, 1, 0.012, -0.004, 0.028, 0.014, 0.04, 0.03, 10, 8);
   const fingers = [[0.029, 0.024, 0.0088], [0.0095, 0.025, 0.0093], [-0.0095, 0.024, 0.0089], [-0.028, 0.021, 0.0079]];
@@ -1043,7 +1518,7 @@ function handBP(side) {
     B.tor(M.skin, R, r, arc, 0.0, y, -0.002, -HALF, 0, g0, 6, 10);
     const a1 = g0 + arc;
     B.sp(M.skin, r * 1.02, Math.cos(a1) * R, y, -0.002 - Math.sin(a1) * R, 1, 1, 1, 8, 6);
-    B.sp(M.skin, r * 1.12, Math.cos(g0) * R + 0.002, y, -0.002 - Math.sin(g0) * R, 1, 1, 1, 8, 6);
+    B.sp(M.grime, r * 1.12, Math.cos(g0) * R + 0.002, y, -0.002 - Math.sin(g0) * R, 1, 1, 1, 8, 6);
   }
   // thumb over the left side
   B.sp(M.skin, 0.02, 0.012, 0.03, 0.03, 1, 0.9, 1.2, 8, 6);
@@ -1054,10 +1529,9 @@ function handBP(side) {
   // wrist and forearm
   B.tz(M.skin, 0.024, 0.03, 0.04, 0.14, 0.018, -0.002, 10, false, 0.85, 1.05);
   B.tz(M.cuff, 0.041, 0.043, 0.13, 0.175, 0.018, 0.0, 12);
-  B.tor(M.cuff, 0.041, 0.0065, TAU, 0.018, 0.0, 0.13, 0, 0, 0, 5, 14);
-  B.tor(M.cuff, 0.043, 0.005, TAU, 0.018, 0.0, 0.175, 0, 0, 0, 5, 14);
+  B.tor(M.cuff, 0.041, 0.0065, TAU, 0.018, 0.0, 0.13, 0, 0, 0, 4, 10);
+  B.tor(M.cuff, 0.043, 0.005, TAU, 0.018, 0.0, 0.175, 0, 0, 0, 4, 10);
   B.tz(M.sleeve, 0.043, 0.05, 0.175, 0.38, 0.018, 0.002, 12);
-  B.tor(M.sleeve, 0.046, 0.004, TAU, 0.018, 0.001, 0.24, 0, 0, 0, 4, 14);
   B.tor(M.sleeve, 0.048, 0.004, TAU, 0.018, 0.002, 0.31, 0, 0, 0, 4, 14);
   const bp = finalize(B, `hand_${side}`, 0.38);
   if (side === 'left') {
@@ -1100,7 +1574,7 @@ function powerupBP(type) {
     case 'nuke': {
       B.xf = new THREE.Matrix4().makeRotationZ(0.55);
       const prof = [[0, -0.22], [0.04, -0.21], [0.075, -0.17], [0.09, -0.1], [0.09, 0.06], [0.07, 0.12], [0.04, 0.16], [0.03, 0.2], [0, 0.2]];
-      B.add(new THREE.LatheGeometry(prof.map(([r, y]) => new THREE.Vector2(r, y)), 16), pBody);
+      B.add(new THREE.LatheGeometry(prof.map(([r, y]) => new THREE.Vector2(r, y)), 8), pBody);
       for (let k = 0; k < 4; k++) {
         const a = (k * PI) / 2;
         B.bx(pGold, 0.1, 0.11, 0.006, Math.cos(a) * 0.055, 0.2, Math.sin(a) * 0.055, 0, -a, 0);
@@ -1209,4 +1683,6 @@ export function disposeShared() {
   GEO.clear();
   if (MATS) for (const m of Object.values(MATS)) m.dispose();
   MATS = null;
+  if (TEX) for (const t of Object.values(TEX)) t.dispose();
+  TEX = null;
 }

@@ -3,7 +3,14 @@
 // (plain Meshes, one shared glaze material) posed by a small joint rig, so she
 // can walk like a doll, jitter in stop-motion, swipe, burst apart, reform and
 // finally shatter across the floor. Also: her tiny figurine and the cracked
-// teacup props for the easter egg. Everything is procedural (canvas textures).
+// teacup props for the easter egg.
+//
+// With `model` (public/models/kintsugi.json via loadModels, built by
+// art/zombies/z_kintsugi.py) the chunks, the figurine and the teacup are the
+// 1997-style exported parts on one painted page (MeshLambertMaterial, the gold
+// seams pulsing through the glow page as the emissive map). model.meta lists the
+// boss parts, which stage drops each chunk, the skirt shard hinges and the prop
+// parts. Without it everything falls back to the procedural version (canvas textures).
 
 import * as THREE from 'three';
 import { ZS as ZSP } from '../../shared/protocol.js';
@@ -576,12 +583,54 @@ function dancePose(J) {
 
 // Skirt shard hinge: rotate about the waistline tangent so the hem flares out.
 const _hv = new THREE.Vector3(), _hm = new THREE.Matrix4(), _ht = new THREE.Matrix4();
-function skirtLocal(out, mid, angle) {
+function skirtLocal(out, mid, angle, hy = -0.045) {
   _hv.set(-Math.cos(mid), 0, Math.sin(mid));
   _hm.makeRotationAxis(_hv, angle);
-  _ht.makeTranslation(0, 0.045, 0);
-  out.makeTranslation(0, -0.045, 0).multiply(_hm).multiply(_ht);
+  _ht.makeTranslation(0, -hy, 0);
+  out.makeTranslation(0, hy, 0).multiply(_hm).multiply(_ht);
   return out;
+}
+
+// --- Exported model (kintsugi.json) --------------------------------------------------------
+// Joint rig from the model's rest pose, keeping the joint names the poses drive.
+function rigFromModel(model) {
+  const J = makeRig();
+  const pending = Object.entries(model.joints || {});
+  let guard = 0;
+  while (pending.length && guard++ < 200) {
+    const [name, j] = pending.shift();
+    const parent = j.parent ? J[j.parent] : J.root;
+    if (!parent) { pending.push([name, j]); continue; }
+    const o = J[name] || new THREE.Object3D();
+    o.name = name;
+    o.position.fromArray(j.pos);
+    parent.add(o);
+    J[name] = o;
+  }
+  return J;
+}
+
+function modelMaterial(model, emissiveIntensity) {
+  return new THREE.MeshLambertMaterial({
+    map: model.texture,
+    emissive: model.emissive ? 0xffffff : 0x000000,
+    emissiveMap: model.emissive || null,
+    emissiveIntensity,
+  });
+}
+
+const hasParts = (model, ...names) => !!(model && model.parts && names.every((n) => model.parts.has(n)));
+
+function chunkOf(name, mesh, joint, drop, skirt) {
+  const geo = mesh.geometry;
+  if (!geo.boundingSphere) geo.computeBoundingSphere();
+  return {
+    name, mesh, joint, drop: drop || 0, skirt,
+    c: geo.boundingSphere.center.clone(), r: geo.boundingSphere.radius,
+    w0: new THREE.Vector3(), q0: new THREE.Quaternion(), v: new THREE.Vector3(), ax: new THREE.Vector3(1, 0, 0), rate: 0,
+    w: new THREE.Vector3(), q: new THREE.Quaternion(), off: new THREE.Vector3(), qr: new THREE.Quaternion(), delay: 0,
+    rest: false, live: true,
+  };
 }
 
 // --- The boss ------------------------------------------------------------------------------
@@ -589,15 +638,59 @@ const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quater
 const _s = new THREE.Vector3(), _m = new THREE.Matrix4(), _up = new THREE.Vector3(0, 1, 0), _w = new THREE.Vector3();
 
 export class KintsugiBoss {
-  constructor(scene, tex) {
+  constructor(scene, tex, model = null) {
     this.scene = scene;
     this.tex = tex;
-    const kit = getKit();
-    this.mat = kit.glaze.clone();
     this.group = new THREE.Group();
     this.group.name = 'kintsugi';
     this.group.visible = false;
     scene.add(this.group);
+    this.hinge = -0.045;   // skirt shard hinge height relative to the hips joint
+    this.glowK = 1;        // scales the emissive levels below for the material in use
+    this.model = hasParts(model, 'face') ? model : null;
+    if (this.model) this.buildModel(this.model);
+    else this.buildProcedural();
+    this._d = null;
+    this._flash = 0;
+  }
+
+  // The exported 1997-style lady: one chunk per rigid part, one shared page material.
+  buildModel(model) {
+    const meta = model.meta || {};
+    this.J = rigFromModel(model);
+    if (Number.isFinite(meta.skirtHinge)) this.hinge = meta.skirtHinge;
+    this.glowK = 0.9;
+    this.mat = modelMaterial(model, 0.6);
+    const drop = meta.drop || {}, skirt = meta.skirt || {}, attach = meta.attach || {};
+    const names = meta.boss || [...model.parts.values()].filter((p) => p.joint).map((p) => p.name);
+    const riders = [];
+    this.chunks = [];
+    for (const name of names) {
+      const part = model.parts.get(name);
+      if (!part || !part.joint) continue;
+      const mesh = new THREE.Mesh(part.geometry, this.mat);
+      mesh.name = `kintsugi-${name}`;
+      mesh.matrixAutoUpdate = false;
+      if (attach[name]) { riders.push([name, mesh]); continue; }
+      this.group.add(mesh);
+      this.chunks.push(chunkOf(name, mesh, this.J[part.joint] || this.J.body, drop[name], skirt[name]));
+    }
+    // The hollow skull and the forearm stump ride on their host chunk (same joint space).
+    const byName = Object.fromEntries(this.chunks.map((c) => [c.name, c]));
+    const extra = {};
+    for (const [name, mesh] of riders) {
+      const host = byName[attach[name]];
+      if (host) host.mesh.add(mesh); else mesh.visible = false;
+      extra[name] = mesh;
+    }
+    this.inner = extra.hollow || new THREE.Object3D();
+    this.stump = extra.stump || new THREE.Object3D();
+  }
+
+  // Procedural fallback: smooth glazed primitives with canvas textures.
+  buildProcedural() {
+    const kit = getKit();
+    this.mat = kit.glaze.clone();
     this.J = makeRig();
     this.chunks = chunkDefs(false).map((def, i) => {
       const geo = pgeo(def.specs, DENS, i + 1);
@@ -629,8 +722,6 @@ export class KintsugiBoss {
     byName.upperL.mesh.add(stump);
     this.inner = inner;
     this.stump = stump;
-    this._d = null;
-    this._flash = 0;
   }
 
   hide() { this.group.visible = false; }
@@ -663,7 +754,7 @@ export class KintsugiBoss {
       if (!this._dead) this.startDeath(d, stage);
       this.stepDeath(d, dt);
       const dT = d.deadT || 0;
-      this.mat.emissiveIntensity = 2.6 * (1 - smooth(0, 1.6, dT)) + 0.06;
+      this.mat.emissiveIntensity = (2.6 * (1 - smooth(0, 1.6, dT)) + 0.06) * this.glowK;
       if (dT > 5) this.group.visible = false;
       return;
     }
@@ -672,7 +763,7 @@ export class KintsugiBoss {
     if (d.state === ZS.SHATTER) {
       if (entered || !this._burstReady) this.startBurst(d, stage, time);
       this.poseBurst(d.stateT || 0);
-      this.mat.emissiveIntensity = 3.2 * (1 - smooth(0, 0.6, d.stateT || 0)) + 0.1;
+      this.mat.emissiveIntensity = (3.2 * (1 - smooth(0, 0.6, d.stateT || 0)) + 0.1) * this.glowK;
       return;
     }
     this._burstReady = false;
@@ -696,7 +787,7 @@ export class KintsugiBoss {
     const base = 0.55 + 0.45 * stage;
     let pulse = 0.78 + 0.22 * Math.sin(time * 2.1);
     if (hp < 0.25) pulse = 0.95 + 0.9 * Math.pow(0.5 + 0.5 * Math.sin(time * 6.5), 3);
-    this.mat.emissiveIntensity = base * pulse + this._flash;
+    this.mat.emissiveIntensity = (base * pulse + this._flash) * this.glowK;
   }
 
   placeRoot(d) {
@@ -711,7 +802,7 @@ export class KintsugiBoss {
   // Assembled matrix for a chunk from the current rig pose.
   target(ch, out) {
     out.copy(ch.joint.matrixWorld);
-    if (ch.skirt !== undefined) out.multiply(skirtLocal(_m, ch.skirt, this.skirtAngle(ch.skirt)));
+    if (ch.skirt !== undefined) out.multiply(skirtLocal(_m, ch.skirt, this.skirtAngle(ch.skirt), this.hinge));
     return out;
   }
 
@@ -949,7 +1040,57 @@ export class KintsugiBoss {
 // --- Easter-egg props ---------------------------------------------------------------------
 const FIG_H = 0.25;       // figurine height without its base
 
-export function buildFigurine() {
+// Faint golden aura (additive sprite), only visible while primed.
+function makeAura(y) {
+  const ac = canvas(128);
+  const ax = ac.getContext('2d');
+  const gr = ax.createRadialGradient(64, 64, 0, 64, 64, 64);
+  gr.addColorStop(0, 'rgba(255,214,120,0.9)'); gr.addColorStop(0.35, 'rgba(255,170,60,0.35)'); gr.addColorStop(1, 'rgba(255,140,40,0)');
+  ax.fillStyle = gr; ax.fillRect(0, 0, 128, 128);
+  const at = new THREE.CanvasTexture(ac);
+  at.colorSpace = THREE.SRGBColorSpace;
+  const aura = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: at, color: 0xffc766, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false,
+  }));
+  aura.scale.set(0.34, 0.4, 1);
+  aura.position.y = y;
+  aura.visible = false;
+  return aura;
+}
+
+// The dancing figurine on its round base. With the model: the exported low-poly
+// figurine (parts in meta.props.figurine), its gold seams lit through the glow page.
+export function buildFigurine(model = null) {
+  if (!hasParts(model, 'figurine')) return buildFigurineProcedural();
+  const mat = modelMaterial(model, 0.05);
+  const group = new THREE.Group();
+  group.name = 'kintsugi-figurine';
+  for (const name of model.meta?.props?.figurine || ['figurine', 'figbase']) {
+    const part = model.parts.get(name);
+    if (part) group.add(new THREE.Mesh(part.geometry, mat));
+  }
+  const aura = makeAura((model.meta?.figurine?.height || FIG_H + 0.022) * 0.55);
+  group.add(aura);
+  let glow = 0;
+  group.userData.setGlow = (k) => {
+    glow = clamp01(k);
+    mat.emissiveIntensity = 0.05 + glow * 2.4;
+    aura.material.opacity = glow * 0.7;
+    aura.visible = glow > 0.001;
+  };
+  group.userData.update = (dt, time) => {
+    if (glow <= 0.001) return;
+    const sh = 0.82 + 0.12 * Math.sin(time * 5.3) + 0.06 * Math.sin(time * 13.7);
+    mat.emissiveIntensity = (0.05 + glow * 2.4) * sh;
+    aura.material.opacity = glow * (0.6 + 0.15 * Math.sin(time * 2.4));
+    aura.material.rotation = time * 0.25;
+    const k = 1 + 0.05 * Math.sin(time * 1.9);
+    aura.scale.set(0.34 * k, 0.4 * k, 1);
+  };
+  return group;
+}
+
+function buildFigurineProcedural() {
   const kit = getKit();
   const mat = kit.glaze.clone();
   mat.emissiveIntensity = 0.05;
@@ -983,20 +1124,7 @@ export function buildFigurine() {
   goldMat.emissiveIntensity = 0.15;
   const rim = new THREE.Mesh(new THREE.TorusGeometry(0.0465, 0.0022, 6, 36).rotateX(Math.PI / 2).translate(0, baseH, 0), goldMat);
   group.add(rim);
-  // Faint golden aura (additive sprite), only visible while primed.
-  const ac = canvas(128);
-  const ax = ac.getContext('2d');
-  const gr = ax.createRadialGradient(64, 64, 0, 64, 64, 64);
-  gr.addColorStop(0, 'rgba(255,214,120,0.9)'); gr.addColorStop(0.35, 'rgba(255,170,60,0.35)'); gr.addColorStop(1, 'rgba(255,140,40,0)');
-  ax.fillStyle = gr; ax.fillRect(0, 0, 128, 128);
-  const at = new THREE.CanvasTexture(ac);
-  at.colorSpace = THREE.SRGBColorSpace;
-  const aura = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: at, color: 0xffc766, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false,
-  }));
-  aura.scale.set(0.34, 0.4, 1);
-  aura.position.y = baseH + FIG_H * 0.55;
-  aura.visible = false;
+  const aura = makeAura(baseH + FIG_H * 0.55);
   group.add(aura);
   let glow = 0;
   group.userData.setGlow = (k) => {
@@ -1018,7 +1146,23 @@ export function buildFigurine() {
   return group;
 }
 
-export function buildTeacup() {
+// A mended teacup on its saucer (the egg's targets and the gold-leaf pickup). With the
+// model: the exported cup (parts in meta.props.teacup), its seam glowing faintly.
+export function buildTeacup(model = null) {
+  if (!hasParts(model, 'teacup')) return buildTeacupProcedural();
+  const mat = modelMaterial(model, 0.45);
+  const group = new THREE.Group();
+  group.name = 'kintsugi-teacup';
+  for (const name of model.meta?.props?.teacup || ['teacup']) {
+    const part = model.parts.get(name);
+    if (part) group.add(new THREE.Mesh(part.geometry, mat));
+  }
+  group.userData.shatter = () => { group.visible = false; };
+  group.userData.restore = () => { group.visible = true; };
+  return group;
+}
+
+function buildTeacupProcedural() {
   const kit = getKit();
   const mat = kit.glaze.clone();
   mat.emissiveIntensity = 0.3;

@@ -54,9 +54,14 @@
   @media (max-width: 560px) { header { grid-template-columns: 1fr; } .tally { width: 110px; height: 62px; } }
 
   /* ---- lineup */
-  .lineup { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; padding-block: 1.6rem; }
-  @media (max-width: 900px) { .lineup { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-  @media (max-width: 480px) { .lineup { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .lineup { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 10px; padding-block: 0.8rem 1.6rem; }
+  .lineup.n4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .grouphead { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap; padding-top: 1.4rem; }
+  .grouphead h2 { font-size: var(--step-2); }
+  .grouphead p { margin: 0; color: var(--ink-dim); font-size: var(--step--1); max-width: 60ch; }
+  .grouphead.big { border-top: 1px solid var(--line); padding-top: 2.4rem; }
+  @media (max-width: 900px) { .lineup, .lineup.n4 { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+  @media (max-width: 480px) { .lineup, .lineup.n4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   .suspect { display: grid; gap: 6px; text-decoration: none; color: inherit; position: relative; }
   .suspect .shot { position: relative; aspect-ratio: 3 / 4; overflow: hidden; background: var(--panel); border: 1px solid var(--line); }
   .suspect img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 0.4s ease; }
@@ -145,7 +150,7 @@
   <header>
     <div>
       <h1>Zombie <span>Lineup</span></h1>
-      <p id="intro">Six directions for Nightfall Bunker's undead, plus a second pass at the favourite, each modelled in Blender from code and staged in its own light. Spin them, hold them against their concept sheets, and mark what to keep. Your picks and notes save to this page for the next round of design.</p>
+      <p id="intro">Nightfall Bunker's cast in the 1997 look now in the game, above the six directions and revisions that led there. Every model is built in Blender from code. Spin them, hold them against their concept sheets, and mark what to keep: your picks and notes save to this page for the next round of design.</p>
     </div>
     <svg class="tally" viewBox="0 0 150 84" role="img" aria-label="Six chalk tally marks">
       <defs><filter id="chalk" x="-10%" y="-10%" width="120%" height="120%"><feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="2" seed="3"/><feDisplacementMap in="SourceGraphic" scale="3.2"/></filter></defs>
@@ -156,7 +161,7 @@
     </svg>
   </header>
 
-  <nav class="lineup" id="lineup" aria-label="All six styles"></nav>
+  <div id="lineups"></div>
   <main id="specimens"></main>
 
   <section class="mixer" aria-labelledby="mixTitle">
@@ -206,11 +211,20 @@
   const state = { picks: {}, mix: {} };
   const badges = {};
 
-  // ---- lineup
+  // ---- lineup, one per group
+  const GROUPS = { world: ['In the game now', 'The 1997 pass: sharp, painted, one world.'], explore: ['Explorations', 'The six directions and the revisions that led here.'] };
+  const navs = {};
+  for (const [key, [title, sub]] of Object.entries(GROUPS)) {
+    const items = DATA.filter((s) => s.group === key);
+    if (!items.length) continue;
+    $('lineups').append(el('div', { class: 'grouphead' }, el('h2', { text: title }), el('p', { text: sub })));
+    navs[key] = el('nav', { class: 'lineup' + (items.length === 4 ? ' n4' : ''), 'aria-label': title });
+    $('lineups').append(navs[key]);
+  }
   DATA.forEach((s, i) => {
     const badge = el('span', { class: 'badge', hidden: true });
     badges[s.id] = badge;
-    $('lineup').append(el('a', { class: 'suspect', href: '#' + s.id },
+    navs[s.group].append(el('a', { class: 'suspect', href: '#' + s.id },
       el('div', { class: 'shot' + (s.pixel ? ' pixel' : '') },
         el('img', { src: s.img.three_quarter, alt: s.name + ', three-quarter view', width: 450, height: 600 }),
         el('span', { class: 'num', text: String(i + 1) }), badge),
@@ -219,7 +233,13 @@
   });
 
   // ---- specimens
+  let lastGroup = null;
   DATA.forEach((s, i) => {
+    if (s.group !== lastGroup) {
+      lastGroup = s.group;
+      const [title, sub] = GROUPS[s.group] || [s.group, ''];
+      $('specimens').append(el('div', { class: 'grouphead big' }, el('h2', { text: title }), el('p', { text: sub })));
+    }
     const stage = el('div', { class: 'stage' + (s.pixel ? ' pixel' : ''), role: 'img', 'aria-label': `${s.name} render` });
     const img = el('img', { src: s.img.three_quarter, alt: `${s.name}, three-quarter view`, loading: i < 2 ? 'eager' : 'lazy', width: 900, height: 1200 });
     const spin = el('div', { class: 'spin', hidden: true, tabindex: '0', role: 'slider', 'aria-label': `Rotate ${s.name}`,

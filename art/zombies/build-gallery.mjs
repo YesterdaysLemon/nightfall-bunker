@@ -27,9 +27,15 @@ for (const s of styles) {
   mkdirSync(out, { recursive: true });
   const pixel = !!n.pixel;
   // Pixel-art styles keep their native 300x400 pixel grid as PNG (the page scales
-  // them up with image-rendering: pixelated); everything else is JPEG.
+  // them up with image-rendering: pixelated); everything else is JPEG. Wide
+  // renders (a hound is longer than it is tall) are letterboxed into the 3:4 card.
   const ext = pixel ? 'png' : 'jpg';
-  const size = pixel ? ['-vf', 'scale=300:400:flags=neighbor'] : ['-q:v', '3'];
+  const wide = (() => {
+    const b = readFileSync(join(dir, 'three_quarter.png'));
+    return b.readUInt32BE(16) > b.readUInt32BE(20);
+  })();
+  const fit = (w, h) => (wide ? `scale=${w}:-2:flags=lanczos,pad=${w}:${h}:0:(oh-ih)/2:color=0x0a0e0b` : `scale=${w}:${h}:flags=lanczos`);
+  const size = pixel ? ['-vf', 'scale=300:400:flags=neighbor'] : ['-vf', fit(900, 1200), '-q:v', '3'];
   const img = {};
   for (const v of ['three_quarter', 'front', 'side', 'back']) {
     const p = join(dir, `${v}.png`);
@@ -40,7 +46,7 @@ for (const s of styles) {
   const frames = existsSync(join(dir, 'turntable')) ? readdirSync(join(dir, 'turntable')).filter((f) => /^f_\d\d\.png$/.test(f)) : [];
   if (frames.length === 24) {
     ff('-framerate', '1', '-i', join(dir, 'turntable', 'f_%02d.png'),
-      '-vf', pixel ? 'scale=300:400:flags=neighbor,tile=6x4' : 'scale=450:600:flags=lanczos,tile=6x4',
+      '-vf', pixel ? 'scale=300:400:flags=neighbor,tile=6x4' : `${fit(450, 600)},tile=6x4`,
       '-frames:v', '1', ...(pixel ? [] : ['-q:v', '4']), join(out, `spin.${ext}`));
     img.spin = `a/${s.id}/spin.${ext}`;
   } else {
@@ -57,7 +63,7 @@ for (const s of styles) {
   }
   const meta = existsSync(join(dir, 'meta.json')) ? JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8')) : {};
   data.push({
-    id: s.id, name: s.name, tagline: s.tagline.replace(/\s*\(bonus\)/, ''), bonus: /bonus/.test(s.tagline), pixel,
+    id: s.id, name: s.name, tagline: s.tagline.replace(/\s*\(bonus\)/, ''), bonus: /bonus/.test(s.tagline), pixel, group: s.group || 'explore',
     pitch: n.pitch, axes: n.axes, tech: n.tech, strong: n.strong, weak: n.weak, game: n.game,
     meta: { tris: meta.tris, height_m: meta.height_m, engine: meta.engine === 'CYCLES' ? 'CYCLES' : 'EEVEE', render_s: meta.render_s },
     img,

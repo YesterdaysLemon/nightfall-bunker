@@ -1672,6 +1672,752 @@ function texCeiling(N) {
 }
 
 // ---------------------------------------------------------------------------
+// Painted low-res pages for the "1997 look" (art/STYLE.md)
+// ---------------------------------------------------------------------------
+// retro.js swaps each world texture for `userData.painted` when present. These
+// pages are painted the way late-90s artists did it: a few hue-shifted ramps per
+// material, value clusters and deliberate strokes (a seam is a dark line with a
+// light edge, a nail is two pixels, peeling plaster has its shadow under the
+// lip), never per-pixel noise. Every stroke wraps, so tiling pages tile.
+
+// Ramps run dark to light: cool shadows, warm highlights. Concrete, wood and
+// chalk follow RAMPS in art/zombies/z_ps1b.py (extended upward to the bunker's
+// exposure); the others extend the table in the same spirit.
+const RAMPS = {
+  concrete: [[26, 30, 28], [36, 40, 37], [46, 50, 45], [58, 62, 55], [72, 75, 66], [88, 90, 79], [106, 106, 93], [126, 124, 108]],
+  wood: [[22, 16, 13], [30, 22, 18], [46, 34, 26], [64, 48, 34], [86, 66, 46], [108, 84, 58], [132, 104, 72], [156, 128, 92]],
+  woodGrey: [[28, 27, 25], [44, 42, 37], [62, 59, 51], [82, 78, 67], [104, 99, 84], [128, 121, 103]],
+  plaster: [[40, 43, 38], [57, 59, 51], [76, 77, 66], [96, 95, 81], [116, 113, 96], [136, 132, 112], [156, 150, 128], [176, 168, 144]],
+  brick: [[38, 24, 22], [58, 33, 28], [80, 43, 34], [100, 55, 41], [120, 68, 50], [140, 84, 62], [160, 106, 82]],
+  mortar: [[40, 41, 38], [62, 61, 55], [86, 84, 75], [110, 106, 94]],
+  olive: [[30, 32, 28], [46, 50, 38], [64, 68, 48], [84, 88, 60], [106, 110, 76], [134, 136, 96]],
+  steel: [[34, 35, 36], [56, 57, 56], [84, 84, 80], [118, 116, 106], [160, 156, 140]],
+  iron: [[16, 16, 17], [30, 29, 28], [50, 48, 45], [80, 76, 70], [120, 114, 104]],
+  rust: [[34, 19, 15], [56, 29, 19], [82, 41, 23], [108, 55, 29], [132, 72, 38], [152, 96, 56], [170, 126, 84]],
+  burlap: [[50, 40, 30], [72, 60, 42], [96, 82, 58], [120, 104, 74], [144, 126, 90], [166, 148, 108], [186, 170, 128]],
+  dirt: [[24, 21, 19], [38, 33, 29], [54, 46, 37], [72, 62, 48], [92, 80, 61], [114, 100, 77]],
+  grassDead: [[38, 42, 30], [58, 62, 40], [82, 84, 54], [106, 104, 68]],
+  chalk: [[120, 30, 26], [170, 52, 40]],
+  teal: [[64, 112, 102], [130, 192, 176], [196, 238, 226]],
+  tealDim: [[30, 44, 40], [42, 64, 58]],
+};
+
+// Big wall and ground ramps also get the half-steps between their colours, so
+// broad value clusters stay calm; on these a shift of 1 is a half step.
+const FINE = new Set(['plaster', 'concrete', 'olive', 'dirt', 'burlap']);
+
+class Page {
+  constructor(w, h = w) {
+    this.w = w;
+    this.h = h;
+    this.pal = [];
+    this.own = [];
+    this.reg = {};
+    this.px = new Uint16Array(w * h);
+  }
+
+  /** Palette index `k` steps up ramp `name` (clamped; half steps on fine ramps). */
+  c(name, k) {
+    let r = this.reg[name];
+    if (!r) {
+      const src = RAMPS[name];
+      const cols = FINE.has(name)
+        ? src.flatMap((c, i) => (i ? [c.map((v, j) => (v + src[i - 1][j]) / 2), c] : [c]))
+        : src;
+      r = this.reg[name] = { i0: this.pal.length, n: cols.length, f: FINE.has(name) ? 2 : 1 };
+      for (const col of cols) { this.pal.push(col); this.own.push(r); }
+    }
+    return r.i0 + Math.max(0, Math.min(r.n - 1, Math.round(k * r.f)));
+  }
+
+  i(x, y) {
+    const { w, h } = this;
+    x = Math.round(x);
+    y = Math.round(y);
+    return (((y % h) + h) % h) * w + (((x % w) + w) % w);
+  }
+
+  get(x, y) { return this.px[this.i(x, y)]; }
+
+  set(x, y, c) { this.px[this.i(x, y)] = c; }
+
+  /** Step a pixel lighter (+) or darker (-) along its own ramp. */
+  shift(x, y, d) {
+    const i = this.i(x, y);
+    const c = this.px[i];
+    const r = this.own[c];
+    if (r) this.px[i] = Math.max(r.i0, Math.min(r.i0 + r.n - 1, c + d));
+  }
+
+  fill(x, y, w, h, c) {
+    for (let yy = 0; yy < h; yy++) for (let xx = 0; xx < w; xx++) this.set(x + xx, y + yy, c);
+  }
+
+  line(x0, y0, x1, y1, fn) {
+    x0 = Math.round(x0); y0 = Math.round(y0); x1 = Math.round(x1); y1 = Math.round(y1);
+    const dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+    let e = dx + dy;
+    for (;;) {
+      fn(x0, y0);
+      if (x0 === x1 && y0 === y1) break;
+      const e2 = 2 * e;
+      if (e2 >= dy) { e += dy; x0 += sx; }
+      if (e2 <= dx) { e += dx; y0 += sy; }
+    }
+  }
+
+  /** Every pixel inside a ragged ellipse. */
+  blob(cx, cy, rx, ry, R, fn, jag = 0.3) {
+    const k1 = 2 + Math.floor(R() * 3), k2 = 5 + Math.floor(R() * 3), p1 = R() * TAU, p2 = R() * TAU;
+    const X = Math.ceil(rx * (1 + jag)), Y = Math.ceil(ry * (1 + jag));
+    const ix = Math.round(cx), iy = Math.round(cy);
+    for (let y = -Y; y <= Y; y++) {
+      for (let x = -X; x <= X; x++) {
+        const a = Math.atan2(y / ry, x / rx);
+        const m = 1 + jag * (0.65 * Math.sin(a * k1 + p1) + 0.35 * Math.sin(a * k2 + p2));
+        if ((x / rx) ** 2 + (y / ry) ** 2 <= m * m) fn(ix + x, iy + y);
+      }
+    }
+  }
+
+  /** A wandering one-pixel stroke. */
+  walk(x, y, ang, steps, R, fn, wander = 0.5) {
+    for (let s = 0; s < steps; s++) {
+      fn(Math.round(x), Math.round(y), s);
+      x += Math.cos(ang);
+      y += Math.sin(ang);
+      ang += (R() - 0.5) * wander;
+    }
+  }
+
+  /** Base fill from two periodic fields quantised into value clusters. */
+  clusters(ramp, base, seed, { cells = 3, hi = 0.76, lo = 0.24, fine = 8, fhi = 0.84, flo = 0.16, stretch = 1 } = {}) {
+    const { w, h } = this;
+    const A = fbm(w, h, seed, { cells, cellsY: Math.max(1, Math.round(cells * stretch)), octaves: 2 });
+    const B = fbm(w, h, seed + 1, { cells: fine, cellsY: Math.max(1, Math.round(fine * stretch)), octaves: 2 });
+    for (let i = 0; i < w * h; i++) {
+      const a = A[i], b = B[i];
+      const t = (a > hi ? 1 : a < lo ? -1 : 0) + (b > fhi ? 1 : b < flo ? -1 : 0);
+      this.px[i] = this.c(ramp, base + Math.max(-1, Math.min(1, t)) * (FINE.has(ramp) ? 0.5 : 1));
+    }
+    return B;
+  }
+
+  /** Nail head: a lit pixel and its shadow, with an optional rust tear. */
+  nail(x, y, rust = 0, lit = 3) {
+    this.set(x, y, this.c('iron', lit));
+    this.set(x + 1, y, this.c('iron', 1));
+    this.set(x, y + 1, this.c('iron', 0));
+    this.set(x + 1, y + 1, this.c('iron', 1));
+    for (let k = 0; k < rust; k++) this.set(x + (k & 1), y + 2 + k, this.c('rust', 2));
+  }
+
+  meanLuma() {
+    let s = 0;
+    for (let i = 0; i < this.px.length; i++) {
+      const c = this.pal[this.px[i]];
+      s += 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+    }
+    return s / this.px.length;
+  }
+
+  /** Canvas of the page; `gain` scales the palette (keeps the colour count). */
+  canvas(gain = 1) {
+    const c = mkCanvas(this.w, this.h);
+    const ctx = c.getContext('2d');
+    const img = ctx.createImageData(this.w, this.h);
+    const pal = this.pal.map((col) => col.map((v) => Math.max(0, Math.min(255, Math.round(v * gain)))));
+    for (let i = 0, q = 0; i < this.px.length; i++, q += 4) {
+      const col = pal[this.px[i]];
+      img.data[q] = col[0]; img.data[q + 1] = col[1]; img.data[q + 2] = col[2]; img.data[q + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+    return c;
+  }
+}
+
+/** One-bit mask of stencil text (thresholded, no anti-aliased fringe). */
+function textMask(W, H, lines) {
+  const c = mkCanvas(W, H);
+  const x = c.getContext('2d', { willReadFrequently: true });
+  x.fillStyle = '#fff';
+  x.textAlign = 'center';
+  x.textBaseline = 'middle';
+  for (const L of lines) {
+    x.save();
+    x.translate(L.x, L.y);
+    if (L.rot) x.rotate(L.rot);
+    if (L.sx) x.scale(L.sx, 1);
+    x.font = `${L.weight ?? 900} ${L.size}px "Arial Black", Impact, "Helvetica Neue", Arial, sans-serif`;
+    x.fillText(L.text, 0, 0);
+    x.restore();
+  }
+  const d = x.getImageData(0, 0, W, H).data;
+  const m = new Uint8Array(W * H);
+  for (let i = 0; i < m.length; i++) m[i] = d[i * 4 + 3] > 120 ? 1 : 0;
+  return m;
+}
+
+function paintPlaster() {
+  const S = 128, p = new Page(S), R = mulberry32(3103);
+  p.clusters('plaster', 3.5, 3104, { cells: 3 });
+  // smoke-stained under the ceiling (row ~40 is 3 m up) and damp at the foot
+  for (let x = 0; x < S; x++) {
+    const a = 50 + Math.round(3 * Math.sin((x / S) * TAU * 2 + 2) + 2 * Math.sin((x / S) * TAU * 5));
+    for (let y = 0; y < a; y++) p.shift(x, y, y > a - 3 ? -1 : -2);
+    const top = 112 + Math.round(2.5 * Math.sin((x / S) * TAU * 3 + 1) + 1.5 * Math.sin((x / S) * TAU * 7));
+    p.shift(x, top, -2);
+    for (let y = top + 1; y < S; y++) p.shift(x, y, -1);
+  }
+  // water stains run down from the ceiling line
+  for (let s = 0; s < 7; s++) {
+    const x0 = R() * S, y0 = 44 + R() * 20, len = 14 + R() * 40, w0 = 2 + R() * 4;
+    for (let t = 0; t < len; t++) {
+      const w = Math.max(1, Math.round(w0 * (1 - (t / len) * 0.7) + Math.sin(t * 0.7 + s) * 0.7));
+      const xc = x0 + Math.sin(t * 0.15 + s) * 1.2;
+      for (let k = 0; k < w; k++) p.shift(xc - w / 2 + k, y0 + t, t > len - 3 || k === 0 ? -3 : -2);
+    }
+  }
+  // grime clusters
+  for (let s = 0; s < 5; s++) p.blob(R() * S, 60 + R() * 60, 6 + R() * 10, 4 + R() * 6, R, (x, y) => p.shift(x, y, -1), 0.4);
+  // peeling patches: brick shows through, with the plaster lip's shadow painted in
+  const hole = new Uint8Array(S * S);
+  for (const [cx, cy, rx, ry] of [[24, 76, 11, 7], [90, 100, 13, 7], [104, 58, 6, 9]]) {
+    p.blob(cx, cy, rx, ry, R, (x, y) => { hole[p.i(x, y)] = 1; }, 0.25);
+    p.blob(cx + rx * 0.6, cy + ry * 0.5, rx * 0.6, ry * 0.6, R, (x, y) => { hole[p.i(x, y)] = 1; }, 0.3);
+    p.blob(cx - rx * 0.5, cy - ry * 0.4, rx * 0.5, ry * 0.5, R, (x, y) => { hole[p.i(x, y)] = 1; }, 0.3);
+  }
+  const H = (x, y) => hole[p.i(x, y)] === 1;
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      if (!H(x, y)) continue;
+      const row = Math.floor(y / 8), off = row & 1 ? 8 : 0, bx = (x + off) % 16, by = y % 8;
+      const v = ((row * 7 + Math.floor((x + off) / 16) * 13) % 3) - 1;
+      p.set(x, y, by === 7 || bx === 15 ? p.c('mortar', 1) : p.c('brick', 2 + (v > 0 ? 1 : 0) + (by === 0 ? 1 : 0)));
+    }
+  }
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      if (H(x, y)) {
+        if (!H(x, y - 1)) p.shift(x, y, -2);
+        else if (!H(x, y - 2)) p.shift(x, y, -1);
+        if (!H(x - 1, y)) p.shift(x, y, -1);
+      } else if (H(x, y - 1)) {
+        p.shift(x, y, 3); // the broken edge below a hole faces up and catches the bulb
+      } else if (H(x, y + 1) || H(x + 1, y)) {
+        p.shift(x, y, 1);
+      }
+    }
+  }
+  // hairline cracks: a dark line with a light pixel under it
+  for (let k = 0; k < 3; k++) {
+    p.walk(R() * S, 55 + R() * 50, (R() - 0.5) * 2.4 + (R() < 0.5 ? 0 : Math.PI), 16 + R() * 18, R, (x, y) => {
+      if (H(x, y)) return;
+      p.shift(x, y, -3);
+      if (!H(x, y + 1)) p.shift(x, y + 1, 1);
+    }, 0.9);
+  }
+  return p;
+}
+
+function paintBrick() {
+  const S = 128, p = new Page(S), R = mulberry32(2102);
+  p.fill(0, 0, S, S, p.c('mortar', 1));
+  const bh = 16, bw = 32;
+  const brick = new Uint8Array(S * S);
+  for (let row = 0; row < 8; row++) {
+    const off = row & 1 ? 16 : 0;
+    for (let col = 0; col < 4; col++) {
+      const x0 = col * bw + off, y0 = row * bh, w = bw - 2, h = bh - 2;
+      const burnt = R() < 0.14, pale = !burnt && R() < 0.1;
+      const k = 3 + (R() < 0.3 ? -1 : R() < 0.3 ? 1 : 0) + (burnt ? -2 : 0) + (pale ? 1 : 0);
+      const c = p.c('brick', k);
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) { p.set(x0 + x, y0 + y, c); brick[p.i(x0 + x, y0 + y)] = 1; }
+      }
+      for (let x = 0; x < w; x++) { p.shift(x0 + x, y0, 1); p.shift(x0 + x, y0 + h - 1, -1); }
+      for (let y = 1; y < h - 1; y++) p.shift(x0 + w - 1, y0 + y, -1);
+      // a couple of fired clusters in the face
+      for (let b = 0; b < 2; b++) {
+        const d = R() < 0.5 ? -1 : 1;
+        p.blob(x0 + 4 + R() * (w - 8), y0 + 3 + R() * (h - 6), 2 + R() * 3, 1 + R() * 1.5, R, (x, y) => {
+          const dx = ((x - x0) % S + S) % S, dy = ((y - y0) % S + S) % S;
+          if (dx > 0 && dx < w - 1 && dy > 0 && dy < h - 1) p.shift(x, y, d);
+        });
+      }
+      // chipped corner
+      if (R() < 0.3) {
+        const cx = R() < 0.5 ? x0 : x0 + w - 3, cy = R() < 0.5 ? y0 : y0 + h - 2;
+        p.fill(cx, cy, 3, 2, p.c('mortar', 2));
+        brick[p.i(cx, cy)] = 0;
+      }
+    }
+  }
+  // recessed mortar: shadow under each brick's bottom edge
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) if (!brick[p.i(x, y)] && brick[p.i(x, y - 1)]) p.set(x, y, p.c('mortar', 0));
+  // soot runs down from the eaves
+  for (let s = 0; s < 4; s++) {
+    const x0 = R() * S, len = 30 + R() * 60, w0 = 3 + R() * 6;
+    for (let t = 0; t < len; t++) {
+      const w = Math.max(1, Math.round(w0 * (1 - t / len)));
+      for (let k = 0; k < w; k++) p.shift(x0 + k - w / 2 + Math.sin(t * 0.2 + s) * 1.5, t, -1);
+    }
+  }
+  return p;
+}
+
+function paintConcrete() {
+  const S = 128, p = new Page(S), R = mulberry32(1102);
+  p.clusters('concrete', 5, 1103, { cells: 3 });
+  // board-formed casting seams: a dark line with a lit lip, and faint board grain
+  for (let i = 0; i < 4; i++) {
+    const y = 32 * i + 6 + (i & 1);
+    for (let x = 0; x < S; x++) { p.set(x, y, p.c('concrete', 2.5)); p.shift(x, y + 1, 2); }
+    for (let g = 0; g < 6; g++) {
+      const yy = y + 4 + Math.floor(R() * 24), xx = R() * S, len = 8 + R() * 34;
+      for (let t = 0; t < len; t++) if (t % 13 !== 12) p.shift(xx + t, yy, -1);
+    }
+    // water runs from the seam
+    for (let s = 0; s < 2; s++) {
+      const xx = R() * S, len = 6 + R() * 16, w = 1 + Math.floor(R() * 3);
+      for (let t = 0; t < len; t++) for (let k = 0; k < w - (t > len * 0.6 ? 1 : 0); k++) p.shift(xx + k, y + 2 + t, -2);
+    }
+  }
+  // blowholes in clusters: a dark pixel with a lit lower rim
+  for (let cl = 0; cl < 14; cl++) {
+    const cx = R() * S, cy = R() * S, n = 3 + Math.floor(R() * 4);
+    for (let k = 0; k < n; k++) {
+      const x = cx + (R() - 0.5) * 10, y = cy + (R() - 0.5) * 8;
+      p.set(x, y, p.c('concrete', 1));
+      if (R() < 0.4) p.set(x + 1, y, p.c('concrete', 2));
+      p.shift(x, y + 1, 2);
+    }
+  }
+  for (let k = 0; k < 2; k++) {
+    p.walk(R() * S, R() * S, R() * TAU, 30 + R() * 25, R, (x, y) => { p.set(x, y, p.c('concrete', 1.5)); p.shift(x + 1, y + 1, 2); }, 0.8);
+  }
+  return p;
+}
+
+function paintFloorBoards() {
+  const S = 128, p = new Page(S), R = mulberry32(5105);
+  const bh = 16;
+  for (let row = 0; row < 8; row++) {
+    const y0 = row * bh;
+    const j1 = Math.floor(R() * S), j2 = j1 + 45 + Math.floor(R() * 40);
+    for (const [a, b] of [[j1, j2], [j2, j1 + S]]) {
+      const k = 3 + (R() < 0.3 ? 1 : 0) - (R() < 0.25 ? 1 : 0);
+      p.fill(a, y0, b - a, bh, p.c('wood', k));
+      for (let g = 0; g < 7; g++) {
+        const gy = y0 + 2 + Math.floor(R() * 11), gx = a + R() * (b - a), len = 6 + R() * 30, d = R() < 0.25 ? 1 : -1;
+        for (let t = 0; t < len && gx + t < b - 1; t++) p.shift(gx + t, gy, d);
+      }
+      if (R() < 0.45) {
+        const kx = Math.round(a + 6 + R() * (b - a - 12)), ky = Math.round(y0 + 5 + R() * 6);
+        p.shift(kx, ky, -2); p.shift(kx + 1, ky, -2);
+        for (const [dx, dy] of [[-1, 0], [2, 0], [0, -1], [1, -1], [0, 1], [1, 1]]) p.shift(kx + dx, ky + dy, -1);
+      }
+      // butt joint and its two nails
+      for (let y = y0; y < y0 + bh; y++) { p.set(a, y, p.c('wood', 0)); p.shift(a + 1, y, 1); }
+      p.nail(a + 3, y0 + 4, 0, 2);
+      p.nail(a + 3, y0 + 10, 0, 2);
+    }
+    for (let x = 0; x < S; x++) {
+      p.shift(x, y0, 1);
+      p.shift(x, y0 + bh - 2, -1);
+      p.set(x, y0 + bh - 1, p.c('wood', 0));
+    }
+    if (row & 1) p.nail(66, y0 + 6, 0, 2);
+  }
+  // stains soaked into the boards, one old and dark
+  for (let s = 0; s < 4; s++) {
+    const cx = R() * S, cy = R() * S, rx = 5 + R() * 9, ry = 3 + R() * 5;
+    p.blob(cx, cy, rx, ry, R, (x, y) => p.shift(x, y, -1), 0.4);
+    if (s === 0) p.blob(cx, cy, rx * 0.5, ry * 0.5, R, (x, y) => p.shift(x, y, -1), 0.4);
+  }
+  // scuffed along the grain where people walk
+  for (let s = 0; s < 7; s++) {
+    const x0 = R() * S, y = Math.floor(R() * 8) * bh + 3 + Math.floor(R() * 9), len = 10 + R() * 26;
+    for (let t = 0; t < len; t++) p.shift(x0 + t, y, 1);
+  }
+  return p;
+}
+
+function paintWoodWall() {
+  const S = 128, p = new Page(S), R = mulberry32(4104);
+  const widths = [22, 20, 23, 21, 20, 22];
+  let x0 = 0;
+  for (const w of widths) {
+    const grey = R() < 0.35;
+    const ramp = grey ? 'woodGrey' : 'wood';
+    const k = (grey ? 3 : 4) + (R() < 0.3 ? -1 : 0);
+    p.fill(x0, 0, w, S, p.c(ramp, k));
+    const inside = (x) => { const d = ((x - x0) % S + S) % S; return d >= 1 && d <= w - 2; };
+    for (let b = 0; b < 3; b++) {
+      const d = b < 2 ? -1 : 1, bx = x0 + 3 + R() * (w - 6), by = R() * S, rx = 2 + R() * 3, ry = 10 + R() * 18;
+      if (d < 0 || !grey) p.blob(bx, by, rx, ry, R, (x, y) => { if (inside(x)) p.shift(x, y, d); }, 0.3);
+    }
+    for (let g = 0; g < 10; g++) {
+      const gx = x0 + 2 + Math.floor(R() * (w - 4)), gy = R() * S, len = 8 + R() * 44, d = g < 8 ? -1 : 1;
+      for (let t = 0; t < len; t++) p.shift(gx + (t > len / 2 && g & 1 ? 1 : 0), gy + t, d);
+    }
+    const knots = Math.floor(R() * 2.4);
+    for (let n = 0; n < knots; n++) {
+      const kx = Math.round(x0 + 5 + R() * (w - 10)), ky = Math.round(R() * S);
+      p.shift(kx, ky, -2); p.shift(kx, ky + 1, -2);
+      for (const [dx, dy] of [[0, -1], [0, 2], [-1, 0], [1, 0], [-1, 1], [1, 1]]) p.shift(kx + dx, ky + dy, -1);
+    }
+    if (R() < 0.5) {
+      const jy = Math.floor(30 + R() * 70);
+      for (let x = x0; x < x0 + w; x++) { p.set(x, jy, p.c(ramp, 0)); p.shift(x, jy + 1, 1); p.shift(x, jy - 1, -1); }
+    }
+    for (let y = 0; y < S; y++) {
+      p.shift(x0, y, 1);
+      p.shift(x0 + w - 2, y, -1);
+      p.set(x0 + w - 1, y, p.c('wood', 0));
+    }
+    p.nail(x0 + 5, 18, 2);
+    p.nail(x0 + w - 7, 20, 1);
+    p.nail(x0 + 5, 82, 1);
+    p.nail(x0 + w - 7, 84, 2);
+    x0 += w;
+  }
+  return p;
+}
+
+function paintCeiling() {
+  const S = 128, p = new Page(S), R = mulberry32(21121);
+  for (let row = 0; row < 8; row++) {
+    const y0 = row * 16;
+    p.fill(0, y0, S, 16, p.c('wood', 2 + (R() < 0.35 ? 1 : 0)));
+    for (let g = 0; g < 8; g++) {
+      const gy = y0 + 2 + Math.floor(R() * 12), gx = R() * S, len = 10 + R() * 40;
+      for (let t = 0; t < len; t++) p.shift(gx + t, gy, R() < 0.9 ? -1 : 0);
+    }
+    for (let x = 0; x < S; x++) { p.set(x, y0, p.c('wood', 0)); p.shift(x, y0 + 1, -1); p.shift(x, y0 + 15, 1); }
+  }
+  for (let s = 0; s < 6; s++) p.blob(R() * S, R() * S, 8 + R() * 12, 5 + R() * 8, R, (x, y) => p.shift(x, y, -1), 0.4);
+  // the heavy beam across the tile (wraps at x = 0), shading painted on its sides
+  const bx = 116, BW = 24;
+  for (let y = 0; y < S; y++) {
+    for (let k = 1; k <= 4; k++) { p.shift(bx - k, y, k < 3 ? -2 : -1); p.shift(bx + BW - 1 + k, y, k < 3 ? -2 : -1); }
+    for (let x = 0; x < BW; x++) {
+      const edge = x < 2 ? 0 : x < 4 ? 1 : x >= BW - 2 ? 1 : 2;
+      p.set(bx + x, y, p.c('wood', edge));
+    }
+  }
+  for (let g = 0; g < 10; g++) {
+    const gx = bx + 5 + Math.floor(R() * (BW - 9)), gy = R() * S, len = 10 + R() * 40;
+    for (let t = 0; t < len; t++) p.shift(gx, gy + t, g < 7 ? -1 : 1);
+  }
+  for (let y = 10; y < S; y += 32) p.nail(bx + 11, y);
+  // cobwebs where the beam meets the boards
+  for (const [x, y, dir] of [[bx - 1, 30, -1], [bx + BW, 86, 1]]) {
+    for (let s = 0; s < 4; s++) p.line(x, y + s * 3, x + dir * (5 + s * 3), y + s * 3 - 4 + s, (a, b) => p.set(a, b, p.c('woodGrey', 4)));
+  }
+  return p;
+}
+
+function paintPlank() {
+  const W = 128, H = 32, p = new Page(W, H), R = mulberry32(12112);
+  p.fill(0, 0, W, H, p.c('wood', 5));
+  for (let b = 0; b < 3; b++) p.blob(10 + R() * 108, 6 + R() * 20, 12 + R() * 16, 3 + R() * 3, R, (x, y) => { if (y > 0 && y < H - 1) p.shift(x, y, b === 1 ? 1 : -1); }, 0.3);
+  for (let g = 0; g < 14; g++) {
+    const gy = 3 + Math.floor(R() * (H - 6)), gx = R() * W, len = 14 + R() * 60, d = g < 10 ? -1 : 1;
+    for (let t = 0; t < len && gx + t < W - 3; t++) p.shift(gx + t, gy + (t > len * 0.6 ? 1 : 0), d);
+  }
+  const kx = 76, ky = 12;
+  p.shift(kx, ky, -3); p.shift(kx + 1, ky, -3);
+  for (const [dx, dy] of [[-1, 0], [2, 0], [0, -1], [1, -1], [0, 1], [1, 1], [-2, 0], [3, 0]]) p.shift(kx + dx, ky + dy, -1);
+  // split from the left end, lit on its lower lip
+  p.line(0, 21, 36, 20, (x, y) => { p.set(x, y, p.c('wood', 1)); p.shift(x, y + 1, 1); });
+  // end grain and edges
+  for (let y = 0; y < H; y++) {
+    for (const [x, d] of [[0, -2], [1, -1], [2, -1], [W - 1, -2], [W - 2, -1], [W - 3, -1]]) p.shift(x, y, d);
+  }
+  for (let x = 0; x < W; x++) { p.shift(x, 0, 1); p.shift(x, 1, 1); p.shift(x, H - 2, -1); p.set(x, H - 1, p.c('wood', 2)); }
+  for (const nx of [6, W - 8]) for (const ny of [7, 22]) p.nail(nx + Math.floor(R() * 2), ny, 2);
+  return p;
+}
+
+function paintCrate() {
+  const S = 128, p = new Page(S), R = mulberry32(13113);
+  for (let b = 0; b < 4; b++) {
+    const y0 = b * 32;
+    p.fill(0, y0, S, 32, p.c('wood', 5 - (b & 1) - (R() < 0.3 ? 1 : 0)));
+    for (let g = 0; g < 9; g++) {
+      const gy = y0 + 3 + Math.floor(R() * 26), gx = R() * S, len = 10 + R() * 50;
+      for (let t = 0; t < len; t++) p.shift(gx + t, gy, g < 7 ? -1 : 1);
+    }
+    for (let x = 0; x < S; x++) { p.shift(x, y0 + 1, 1); p.shift(x, y0 + 30, -1); p.set(x, y0 + 31, p.c('wood', 1)); }
+  }
+  // stencilled lot marking, worn away in clusters
+  const m = textMask(S, S, [
+    { text: '7,92 S.m.K.', x: 64, y: 21, size: 10, weight: 700 },
+    { text: 'MUNITION', x: 64, y: 47, size: 16, sx: 0.9 },
+    { text: '1500 PATR.', x: 64, y: 79, size: 12, sx: 0.9 },
+    { text: 'LOS 17-43', x: 64, y: 105, size: 9, weight: 700 },
+  ]);
+  const wear = fbm(S, S, 13114, { cells: 10, octaves: 2 });
+  for (let i = 0; i < m.length; i++) if (m[i] && wear[i] < 0.78 && (i >> 7) % 32 < 30) p.px[i] = p.c('iron', 1);
+  // frame battens: lit on their top/left edges, casting a shadow onto the boards
+  const F = 12;
+  const batten = (x, y, w, h, vert) => {
+    p.fill(x, y, w, h, p.c('wood', 3));
+    for (let g = 0; g < 4; g++) {
+      if (vert) { const gx = x + 2 + Math.floor(R() * (w - 4)); for (let t = 0; t < h; t++) if ((t + g * 7) % 23 < 15) p.shift(gx, y + t, -1); }
+      else { const gy = y + 2 + Math.floor(R() * (h - 4)); for (let t = 0; t < w; t++) if ((t + g * 11) % 37 < 26) p.shift(x + t, gy, -1); }
+    }
+    for (let t = 0; t < w; t++) { p.shift(x + t, y, 2); p.set(x + t, y + h - 1, p.c('wood', 1)); }
+    for (let t = 0; t < h; t++) { p.shift(x, y + t, 1); p.shift(x + w - 1, y + t, -1); }
+  };
+  batten(0, 0, S, F, false);
+  batten(0, S - F, S, F, false);
+  batten(0, F, F, S - 2 * F, true);
+  batten(S - F, F, F, S - 2 * F, true);
+  for (let t = F; t < S - F; t++) { p.shift(t, F, -2); p.shift(t, F + 1, -1); p.shift(F, t, -1); }
+  for (const [x, y] of [[4, 4], [S - 7, 4], [4, S - 7], [S - 7, S - 7], [4, 60], [S - 7, 60], [60, 4], [60, S - 7]]) p.nail(x, y, 1);
+  // somebody counted these in red chalk
+  for (let k = 0; k < 3; k++) p.line(92 + k * 3, 97, 91 + k * 3, 105, (x, y) => p.set(x, y, p.c('chalk', (x + y) & 1)));
+  p.line(89, 104, 101, 98, (x, y) => p.set(x, y, p.c('chalk', 1)));
+  return p;
+}
+
+function paintBoxLid() {
+  const S = 128, p = new Page(S), R = mulberry32(14114);
+  const rows = [0, 26, 52, 77, 103, 128];
+  for (let b = 0; b < 5; b++) {
+    const y0 = rows[b], h = rows[b + 1] - y0;
+    p.fill(0, y0, S, h, p.c('wood', 2 + (b & 1)));
+    for (let g = 0; g < 8; g++) {
+      const gy = y0 + 2 + Math.floor(R() * (h - 4)), gx = R() * S, len = 10 + R() * 50;
+      for (let t = 0; t < len; t++) p.shift(gx + t, gy, g < 6 ? -1 : 1);
+    }
+    for (let x = 0; x < S; x++) { p.shift(x, y0 + 1, 1); p.set(x, y0 + h - 1, p.c('wood', 0)); }
+  }
+  // the question mark, painted in pale glowing teal with a halo on the wood
+  const m = textMask(S, S, [{ text: '?', x: 64, y: 68, size: 92 }]);
+  const small = textMask(S, S, [{ text: '?', x: 27, y: 30, size: 24, rot: -0.3 }, { text: '?', x: 101, y: 98, size: 24, rot: 0.25 }]);
+  const M = (x, y) => m[p.i(x, y)] === 1;
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      if (M(x, y)) p.set(x, y, p.c('teal', !M(x, y - 1) || !M(x - 1, y) ? 2 : !M(x, y + 2) || !M(x + 2, y) ? 0 : 1));
+      else if (small[p.i(x, y)]) p.set(x, y, p.c('teal', 0));
+      else {
+        let near = 9;
+        for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) if (M(x + dx, y + dy)) near = Math.min(near, Math.max(Math.abs(dx), Math.abs(dy)));
+        if (near <= 1) p.set(x, y, p.c('tealDim', 1));
+        else if (near <= 3) p.set(x, y, p.c('tealDim', 0));
+      }
+    }
+  }
+  // iron corner brackets with rivets
+  const B = 20, T = 5;
+  for (const [sx, sy] of [[1, 1], [-1, 1], [1, -1], [-1, -1]]) {
+    const X = (v) => (sx > 0 ? v : S - 1 - v), Y = (v) => (sy > 0 ? v : S - 1 - v);
+    for (let a = 0; a < B; a++) {
+      for (let b = 0; b < T; b++) {
+        p.set(X(a), Y(b), p.c('iron', b === 0 || a === 0 ? 3 : 2));
+        p.set(X(b), Y(a), p.c('iron', b === 0 || a === 0 ? 3 : 2));
+      }
+      p.set(X(a), Y(T), p.c('iron', 0));
+      p.set(X(T), Y(a), p.c('iron', 0));
+    }
+    for (const [a, b] of [[2, 2], [B - 3, 2], [2, B - 3]]) { p.set(X(a), Y(b), p.c('iron', 4)); p.set(X(a), Y(b + 1), p.c('iron', 0)); }
+  }
+  return p;
+}
+
+function paintMetal() {
+  const S = 128, p = new Page(S), R = mulberry32(9109);
+  p.clusters('olive', 3, 9110, { cells: 3 });
+  // panel seams with rivet rows
+  for (let y = 0; y < S; y++) { p.shift(0, y, -3); p.shift(1, y, 2); p.shift(64, y, -3); p.shift(65, y, 2); }
+  for (let x = 0; x < S; x++) { p.shift(x, 44, -3); p.shift(x, 45, 2); }
+  const rivets = [];
+  for (let y = 4; y < S; y += 8) rivets.push([4, y], [68, y]);
+  for (let x = 8; x < S; x += 8) if (x % 64 > 6) rivets.push([x, 48]);
+  for (const [x, y] of rivets) { p.shift(x, y, 3); p.shift(x, y + 1, -3); }
+  // rust weeps under a few rivets
+  for (let s = 0; s < 6; s++) {
+    const [x, y] = rivets[Math.floor(R() * rivets.length)], len = 6 + R() * 16;
+    for (let t = 2; t < len; t++) p.set(x + (t > len * 0.5 && s & 1 ? 1 : 0), y + t, p.c('rust', t < len * 0.4 ? 3 : 2));
+  }
+  // paint chips in clusters: bare steel, shadowed under the paint's edge
+  const chip = new Uint8Array(S * S);
+  for (let cl = 0; cl < 11; cl++) {
+    const cx = R() * S, cy = R() * S, n = 2 + Math.floor(R() * 4);
+    const kind = R() < 0.3 ? 2 : 1;
+    for (let k = 0; k < n; k++) p.blob(cx + (R() - 0.5) * 18, cy + (R() - 0.5) * 14, 1 + R() * 2.5, 1 + R() * 2, R, (x, y) => { chip[p.i(x, y)] = kind; }, 0.5);
+  }
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      if (!chip[p.i(x, y)]) continue;
+      p.set(x, y, p.c(chip[p.i(x, y)] === 2 ? 'rust' : 'steel', !chip[p.i(x, y - 1)] || !chip[p.i(x - 1, y)] ? 1 : 3));
+      if (!chip[p.i(x, y + 1)]) p.shift(x, y + 1, 2);
+    }
+  }
+  for (let s = 0; s < 9; s++) {
+    const x = R() * S, y = R() * S, a = (R() - 0.5) * 1.4;
+    p.line(x, y, x + Math.cos(a) * (3 + R() * 6), y + Math.sin(a) * (3 + R() * 6), (a2, b2) => p.set(a2, b2, p.c('steel', 3)));
+  }
+  return p;
+}
+
+function paintRust() {
+  const S = 128, p = new Page(S), R = mulberry32(10110);
+  const A = fbm(S, S, 10111, { cells: 3, octaves: 2 }), B = fbm(S, S, 10112, { cells: 9, octaves: 2 });
+  for (let i = 0; i < S * S; i++) p.px[i] = p.c('rust', 1 + Math.min(4, Math.floor(A[i] * 5)) + (B[i] > 0.74 ? 1 : B[i] < 0.26 ? -1 : 0));
+  // remnant paint islands
+  for (let s = 0; s < 5; s++) {
+    const cx = R() * S, cy = R() * S;
+    p.blob(cx, cy, 4 + R() * 7, 3 + R() * 5, R, (x, y) => p.set(x, y, p.c('olive', 2)), 0.5);
+  }
+  // lifted scale: lit on top, a shadow under
+  for (let s = 0; s < 16; s++) {
+    const set = new Set();
+    p.blob(R() * S, R() * S, 2 + R() * 4, 1.5 + R() * 2.5, R, (x, y) => set.add(p.i(x, y)), 0.45);
+    for (const i of set) {
+      const x = i % S, y = (i / S) | 0;
+      p.px[i] = p.c('rust', set.has(p.i(x, y - 1)) ? 4 : 6);
+      if (!set.has(p.i(x, y + 1))) p.set(x, y + 1, p.c('rust', 0));
+    }
+  }
+  for (let cl = 0; cl < 10; cl++) {
+    const cx = R() * S, cy = R() * S;
+    for (let k = 0; k < 4; k++) p.set(cx + (R() - 0.5) * 8, cy + (R() - 0.5) * 6, p.c('rust', 0));
+  }
+  for (let s = 0; s < 5; s++) {
+    const x = R() * S, y = R() * S, len = 10 + R() * 24;
+    for (let t = 0; t < len; t++) p.shift(x, y + t, -1);
+  }
+  return p;
+}
+
+function paintSandbag() {
+  const S = 64, p = new Page(S), R = mulberry32(11111);
+  p.clusters('burlap', 3, 11112, { cells: 2, fine: 5 });
+  // threads: short broken strokes, the weave's direction
+  for (let s = 0; s < 34; s++) {
+    const x = R() * S, y = R() * S, len = 3 + R() * 6, horiz = R() < 0.6;
+    for (let t = 0; t < len; t++) p.shift(horiz ? x + t : x, horiz ? y : y + t, -1);
+  }
+  // creases: a dark fold with a lit ridge above
+  for (let s = 0; s < 3; s++) {
+    const x = 6 + R() * 44, y = 10 + R() * 34, a = (R() - 0.5) * 1.2, len = 10 + R() * 16;
+    const x1 = x + Math.cos(a) * len, y1 = y + Math.sin(a) * len;
+    p.line(x, y, x1, y1, (a2, b2) => { p.shift(a2, b2, -3); p.shift(a2, b2 - 1, 2); });
+  }
+  // stitched seam at one end, tied end at the other
+  for (let y = 0; y < S; y++) { p.set(57, y, p.c('burlap', 1)); p.shift(58, y, 2); if (y % 4 < 2) p.set(56, y, p.c('burlap', 5)); }
+  for (let y = 0; y < S; y++) p.shift(2, y, -2);
+  // mud caked on the lower third
+  for (let x = 0; x < S; x++) {
+    const top = 49 + Math.round(2 * Math.sin((x / S) * TAU * 2) + 1.2 * Math.sin((x / S) * TAU * 5 + 1));
+    for (let y = top; y < S; y++) p.set(x, y, p.c('dirt', y === top ? 4 : y > 58 ? 2 : 3));
+  }
+  for (let s = 0; s < 2; s++) p.blob(R() * S, 10 + R() * 30, 4 + R() * 5, 3 + R() * 3, R, (x, y) => p.shift(x, y, -2), 0.4);
+  return p;
+}
+
+function paintDirt() {
+  const S = 128, p = new Page(S), R = mulberry32(6106);
+  p.clusters('dirt', 3, 6107, { cells: 3, fine: 7 });
+  for (let s = 0; s < 6; s++) p.blob(R() * S, R() * S, 6 + R() * 10, 4 + R() * 8, R, (x, y) => p.shift(x, y, -2), 0.45);
+  // pebbles: lit on top, a shadow pixel underneath
+  for (let s = 0; s < 46; s++) {
+    const x = Math.round(R() * S), y = Math.round(R() * S), big = R() < 0.3;
+    const k = 3 + Math.floor(R() * 2);
+    p.set(x, y, p.c('concrete', k + 1));
+    if (big) { p.set(x + 1, y, p.c('concrete', k)); p.set(x, y + 1, p.c('concrete', k - 1)); p.set(x + 1, y + 1, p.c('concrete', k - 1)); }
+    p.set(x + (big ? 1 : 0), y + (big ? 2 : 1), p.c('dirt', 0));
+  }
+  // tufts of dead grass
+  for (let s = 0; s < 14; s++) {
+    const x = R() * S, y = R() * S;
+    for (let b = 0; b < 4; b++) {
+      const a = -Math.PI / 2 + (b - 1.5) * 0.45 + (R() - 0.5) * 0.3, len = 2 + R() * 4;
+      p.line(x + b - 1.5, y, x + b - 1.5 + Math.cos(a) * len, y + Math.sin(a) * len, (a2, b2) => p.set(a2, b2, p.c('grassDead', b & 1 ? 1 : 2)));
+    }
+  }
+  return p;
+}
+
+function paintTarmac() {
+  const S = 128, p = new Page(S), R = mulberry32(8108);
+  p.clusters('concrete', 2, 8109, { cells: 3 });
+  // tar-sealed repair patches with a lit edge
+  for (let s = 0; s < 3; s++) {
+    const x0 = Math.round(R() * S), y0 = Math.round(R() * S), w = 16 + Math.round(R() * 26), h = 12 + Math.round(R() * 20);
+    p.fill(x0, y0, w, h, p.c('concrete', 1));
+    for (let x = 0; x < w; x++) { p.shift(x0 + x, y0, 2); p.set(x0 + x, y0 + h, p.c('concrete', 3)); }
+    for (let y = 0; y < h; y++) p.set(x0 + w, y0 + y, p.c('concrete', 3));
+  }
+  for (let k = 0; k < 5; k++) {
+    p.walk(R() * S, R() * S, R() * TAU, 20 + R() * 40, R, (x, y) => { p.set(x, y, p.c('concrete', 0.5)); p.shift(x + 1, y + 1, 2); }, 1.0);
+  }
+  for (let s = 0; s < 30; s++) p.set(R() * S, R() * S, p.c('concrete', 4));
+  return p;
+}
+
+function paintBark() {
+  const S = 64, p = new Page(S), R = mulberry32(20120);
+  p.fill(0, 0, S, S, p.c('woodGrey', 1));
+  // raised plates between dark fissures, lit on the left
+  let x = 0;
+  while (x < S) {
+    const w = 5 + Math.floor(R() * 4);
+    let y = 0;
+    while (y < S) {
+      const h = 8 + Math.floor(R() * 14), dx = Math.floor(R() * 2);
+      for (let yy = 0; yy < h - 1; yy++) {
+        for (let xx = 1; xx < w - 1; xx++) p.set(x + xx + dx, y + yy, p.c('woodGrey', xx === 1 ? 4 : xx === w - 2 ? 2 : 3));
+      }
+      y += h;
+    }
+    x += w;
+  }
+  for (let s = 0; s < 4; s++) p.blob(R() * S, R() * S, 2 + R() * 3, 3 + R() * 4, R, (a, b) => { if (p.get(a, b) !== p.c('woodGrey', 1)) p.set(a, b, p.c('grassDead', 1)); }, 0.4);
+  return p;
+}
+
+function meanLumaCanvas(src) {
+  const c = mkCanvas(32);
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(src, 0, 0, 32, 32);
+  const d = ctx.getImageData(0, 0, 32, 32).data;
+  let s = 0;
+  for (let i = 0; i < d.length; i += 4) s += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+  return s / 1024;
+}
+
+const PAINTERS = {
+  plaster: paintPlaster, brick: paintBrick, concrete: paintConcrete, floorBoards: paintFloorBoards,
+  woodWall: paintWoodWall, ceiling: paintCeiling, plank: paintPlank, crate: paintCrate, boxLid: paintBoxLid,
+  metal: paintMetal, rust: paintRust, sandbag: paintSandbag, dirt: paintDirt, tarmac: paintTarmac, bark: paintBark,
+};
+
+/**
+ * Painted low-res pages keyed like the hi-res canvases. Each palette is scaled
+ * so the page's mean brightness sits near its hi-res original, which keeps the
+ * lighting tuned for either setting.
+ */
+// The plaster reads cleaner than its soot-washed original at the same mean, so
+// it sits a little lower to keep the walls murky behind the characters.
+const EXPOSURE = { plaster: 0.88 };
+
+function paintPages(hiCanvases) {
+  const out = {};
+  for (const [name, paint] of Object.entries(PAINTERS)) {
+    const page = paint();
+    const hi = hiCanvases[name];
+    const gain = (EXPOSURE[name] ?? 1) * (hi ? Math.max(0.75, Math.min(1.4, meanLumaCanvas(hi) / page.meanLuma())) : 1);
+    out[name] = page.canvas(gain);
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 
 const NON_TILING = new Set(['plank', 'crate', 'boxLid', 'bloodDecal', 'scorch', 'paper']);
 
@@ -1712,10 +2458,13 @@ export function createTextures(renderer) {
     bark: texBark(N),
     ceiling: texCeiling(N),
   };
+  const painted = paintPages(canvases);
   const out = {};
   for (const [name, canvas] of Object.entries(canvases)) {
     const t = makeCanvasTexture(canvas, { repeat: !NON_TILING.has(name) });
     t.name = name;
+    // The hand-painted page the "1997 look" swaps in (retro.js).
+    if (painted[name]) t.userData.painted = painted[name];
     out[name] = t;
   }
   return out;

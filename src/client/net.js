@@ -89,22 +89,41 @@ export const lobbyApi = {
   createParty: (isPublic) => getJSON('/net/party', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ public: !!isPublic }) }),
   quick: (pings) => getJSON(`/net/quick?p=${encodeURIComponent(JSON.stringify(pings || {}))}`),
 
-  // Round trip to each region's beacon: one warm-up, then best of two.
-  async probe(regions, onUpdate) {
-    const out = {};
-    const one = async (r) => {
-      let best = Infinity;
-      for (let i = 0; i < 3; i++) {
-        const t0 = performance.now();
-        try { await getJSON(`/net/ping/${r}`, { timeout: 4000 }); } catch { break; }
-        const ms = performance.now() - t0;
-        if (i > 0) best = Math.min(best, ms);
-      }
-      if (Number.isFinite(best)) { out[r] = Math.round(best); onUpdate?.({ ...out }); }
-    };
-    const queue = [...regions];
-    const workers = Array.from({ length: 3 }, async () => { while (queue.length) await one(queue.shift()); });
-    await Promise.all(workers);
-    return out;
-  },
+  // Round trip (ms) to each region's beacon; see probeRegions.
+  probe: (regions, onUpdate) => probeRegions(regions, pingOnce, onUpdate),
 };
+
+// One timed round trip to a region's beacon, or null if it didn't answer.
+async function pingOnce(region) {
+  const t0 = performance.now();
+  try { await getJSON(`/net/ping/${region}`, { timeout: 4000 }); } catch { return null; }
+  return performance.now() - t0;
+}
+
+// Each region's best round trip. Pass one covers every region quickly, three at a
+// time: a warm-up (connection and beacon), then the best of two. Neighbouring
+// regions can sit only 10–20 ms apart, and parallel probes jitter each other by
+// that much, so pass two re-measures the closest few one at a time and keeps each
+// region's best. `time(region)` resolves to ms or null.
+export async function probeRegions(regions, time, onUpdate) {
+  const out = {};
+  const sample = async (r, n) => {
+    let best = out[r] ?? Infinity;
+    for (let i = 0; i < n; i++) {
+      const ms = await time(r);
+      if (ms == null) break;
+      best = Math.min(best, ms);
+    }
+    if (Number.isFinite(best)) { out[r] = Math.round(best); onUpdate?.({ ...out }); }
+  };
+  const queue = [...regions];
+  await Promise.all(Array.from({ length: 3 }, async () => {
+    while (queue.length) {
+      const r = queue.shift();
+      if ((await time(r)) != null) await sample(r, 2);
+    }
+  }));
+  const closest = Object.keys(out).sort((a, b) => out[a] - out[b]).slice(0, 3);
+  for (const r of closest) await sample(r, 3);
+  return out;
+}

@@ -12,8 +12,10 @@
 // Weapon conventions (meters): origin = trigger-hand / pistol-grip position,
 // barrel toward -Z, +Y up, centred on X = 0.
 //   userData.muzzle / sight / leftHand : Object3D anchors (direct children)
-//   userData.parts : { mag, bolt, pump, slide, barrels } animated sub-groups
-//                    (each carries userData.restPosition / restRotation)
+//   userData.parts : { mag, bolt, pump, slide, barrels, ... } animated sub-groups
+//                    (each carries userData.restPosition / restRotation; a part
+//                    built with a parent, like the Leyden Rifle's jar cores on its
+//                    jar rack, is that part's child)
 //   userData.length : overall length in meters
 // Every material carries userData.chalk (metal/wood/dark/hole/glass/glow/skin/
 // cloth): chalk.js traces wall-buy outlines from these classes.
@@ -21,6 +23,8 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { WEAPONS } from '../../shared/weapons.js';
+import { RANDOM_POWERUPS } from '../../shared/powerups.js';
+import { mulberry32 } from '../../shared/rng.js';
 
 const PI = Math.PI;
 const HALF = PI / 2;
@@ -29,17 +33,6 @@ const TAU = PI * 2;
 // ---------------------------------------------------------------------------
 // Painted texture pages
 // ---------------------------------------------------------------------------
-
-function mulberry32(seed) {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 // Tileable value noise on a (w/cx) x (h/cy) lattice, smoothly interpolated.
 function noise(w, h, cx, cy, r) {
@@ -493,8 +486,9 @@ class Builder {
     this.xf = null;
   }
 
-  part(name, pos = [0, 0, 0], rot = [0, 0, 0], order = 'XYZ') {
-    const p = { pos: new THREE.Vector3(...pos), rot: new THREE.Euler(rot[0], rot[1], rot[2], order), items: [], userData: {} };
+  /** Start an animated part. With `parent` (a part declared earlier) it rides on that part and `pos` is relative to it. */
+  part(name, pos = [0, 0, 0], rot = [0, 0, 0], order = 'XYZ', parent = null) {
+    const p = { pos: new THREE.Vector3(...pos), rot: new THREE.Euler(rot[0], rot[1], rot[2], order), items: [], userData: parent ? { parent } : {} };
     this.parts.set(name, p);
     this.cur = p;
     return this;
@@ -780,7 +774,7 @@ function instantiate(bp) {
         restRotationOrder: part.rot.order,
         ...part.userData,
       };
-      group.add(pg);
+      (parts[part.userData.parent] || group).add(pg);
       parts[part.name] = pg;
       target = pg;
     }
@@ -1455,9 +1449,103 @@ function arcPistol(B, M) {
   return 0.33;
 }
 
-const WEAPON_BUILDERS = {
+// The Leyden Rifle: a walnut-stocked coil gun. Three glass Leyden jars stand in a
+// copper rack on the receiver (the 'mag' part, lifted out whole to reload); each
+// holds one shot, and its glowing core ('core0'..'core2', riding on the rack)
+// goes dark when spent. The coil barrel sits inside a glass sleeve, the sights
+// ride on stilts above the jars, and a crank on the left ('bolt') winds the
+// charge back up after each shot.
+function leyden(B, M) {
+  const rake = 0.3;
+  const gc = [0, -0.028, 0.03];
+  // stock and pistol grip
+  B.ext(M.wood, shapeFrom([
+    [0.012, 0.064], [-0.1, 0.052], [-0.27, 0.062], [-0.3, 0.056], [-0.304, 0.0], [-0.298, -0.066],
+    [-0.265, -0.07], [-0.11, -0.02], [-0.04, 0.004], [0.012, 0.024],
+  ]), 0.04);
+  buttPlate(B, M.brass, 0.13, -0.004, 0.305, 0.042);
+  for (const z of [0.11, 0.2]) B.bx(M.copper, 0.044, 0.01, 0.012, 0, 0.049 + (z - 0.11) * 0.06, z);
+  B.bx(M.wood, 0.032, 0.1, 0.044, ...gc, -rake);
+  B.bx(M.brass, 0.036, 0.01, 0.048, ...along(...gc, rake, -0.052), -rake);
+  triggerGuard(B, M.brass, 0.02, -0.034, 0.017, M.copper);
+  // brass receiver with a riveted copper side plate and a bakelite belly
+  B.bx(M.brass, 0.058, 0.07, 0.22, 0, 0.06, -0.12);
+  B.bx(M.bakelite, 0.05, 0.022, 0.2, 0, 0.018, -0.13);
+  for (const s of [-1, 1]) {
+    B.bx(M.copper, 0.003, 0.05, 0.16, s * 0.03, 0.062, -0.12);
+    for (let i = 0; i < 4; i++) for (const y of [0.042, 0.082]) B.sp(M.brass, 0.0032, s * 0.0318, y, -0.05 - i * 0.046, 1, 1, 1, 6, 4);
+  }
+  // pressure dial (left) above the crank
+  B.tx(M.brass, 0.015, 0.01, -0.034, 0.078, -0.17, 12);
+  B.add(G.hex(0.012), M.glowSoft, -0.0395, 0.078, -0.17, 0, 0, HALF);
+  B.bx(M.black, 0.001, 0.01, 0.0015, -0.041, 0.081, -0.168, 0.7);
+  // terminal block where the jar rack plugs in
+  B.bx(M.bakelite, 0.04, 0.02, 0.022, 0, 0.1, -0.225);
+  for (const x of [-0.012, 0, 0.012]) B.cy(M.copper, 0.004, 0.004, 0.012, x, 0.114, -0.225, 0, 0, 0, 6);
+  // coil barrel: a glowing core wound with copper, inside a glass sleeve
+  const by = 0.066;
+  B.tz(M.brass, 0.03, 0.03, -0.25, -0.23, 0, by, 12);
+  B.tz(M.glow, 0.0055, 0.0055, -0.62, -0.25, 0, by, 6);
+  B.add(new THREE.TubeGeometry(new HelixCurve(0.016, 13, -0.26, -0.61), 104, 0.0028, 3, false), M.copper, 0, by, 0);
+  B.tz(M.glass, 0.026, 0.026, -0.62, -0.25, 0, by, 12);
+  for (const z of [-0.25, -0.43, -0.62]) B.tor(M.brass, 0.027, 0.005, TAU, 0, by, z, 0, 0, 0, 4, 10);
+  B.bx(M.steel, 0.008, 0.006, 0.4, 0, by + 0.031, -0.43);
+  B.bx(M.bakelite, 0.036, 0.03, 0.34, 0, 0.022, -0.42);
+  for (let i = 0; i < 5; i++) B.bx(M.copper, 0.038, 0.004, 0.006, 0, 0.022, -0.29 - i * 0.06);
+  // emitter: a turned brass nose, two forked copper prongs and a glowing ball between them
+  B.tz(M.brass, 0.02, 0.028, -0.68, -0.62, 0, by, 10);
+  B.tz(M.steel, 0.012, 0.018, -0.7, -0.68, 0, by, 8);
+  for (const s of [-1, 1]) {
+    B.rod(M.copper, 0.0035, [s * 0.014, by, -0.69], [s * 0.03, by + 0.004, -0.75], 6);
+    B.rod(M.copper, 0.003, [s * 0.03, by + 0.004, -0.75], [s * 0.018, by, -0.79], 6);
+    B.sp(M.brass, 0.005, s * 0.018, by, -0.79, 1, 1, 1, 6, 4);
+  }
+  B.sp(M.glow, 0.008, 0, by, -0.775, 1, 1, 1, 8, 6);
+  B.sp(M.glowSoft, 0.017, 0, by, -0.775, 1, 1, 1, 10, 8);
+  // sights on stilts, clear of the jars
+  const sy = 0.212;
+  for (const z of [0.0, -0.26]) {
+    for (const s of [-1, 1]) B.rod(M.brass, 0.0025, [s * 0.02, 0.095, z], [s * 0.006, sy - 0.004, z], 5);
+  }
+  B.bx(M.brass, 0.012, 0.006, 0.27, 0, sy, -0.13);
+  B.bx(M.brass, 0.02, 0.012, 0.008, 0, sy + 0.006, 0.0);
+  B.bx(M.black, 0.004, 0.006, 0.009, 0, sy + 0.009, 0.0);
+  B.bx(M.brass, 0.0028, 0.012, 0.004, 0, sy + 0.009, -0.26);
+  B.sp(M.glow, 0.0026, 0, sy + 0.016, -0.26, 1, 1, 1, 6, 4);
+  // the jar rack (magazine): three Leyden jars in a copper tray
+  const JZ = [-0.05, 0, 0.05];
+  B.part('mag', [0, 0.095, -0.12]);
+  B.bx(M.copper, 0.05, 0.01, 0.16, 0, 0.005, 0);
+  B.bx(M.brass, 0.054, 0.004, 0.164, 0, 0.011, 0);
+  B.bx(M.bakelite, 0.03, 0.018, 0.02, 0, 0.018, -0.09);
+  for (const z of JZ) {
+    B.cy(M.copper, 0.0215, 0.0215, 0.028, 0, 0.026, z, 0, 0, 0, 10);
+    B.cy(M.glass, 0.021, 0.021, 0.056, 0, 0.04, z, 0, 0, 0, 10);
+    B.cy(M.bakelite, 0.015, 0.017, 0.009, 0, 0.072, z, 0, 0, 0, 10);
+    B.cy(M.brass, 0.0018, 0.0018, 0.022, 0, 0.086, z, 0, 0, 0, 5);
+    B.sp(M.brass, 0.0055, 0, 0.098, z, 1, 1, 1, 8, 6);
+    B.rod(M.copper, 0.0016, [0, 0.098, z], [0, 0.03, -0.09], 4);
+  }
+  JZ.forEach((z, i) => {
+    B.part(`core${i}`, [0, 0.042, z], [0, 0, 0], 'XYZ', 'mag');
+    B.cy(M.glow, 0.0075, 0.0075, 0.042, 0, 0, 0, 0, 0, 0, 6);
+    B.sp(M.glowSoft, 0.017, 0, 0, 0, 1, 1.5, 1, 8, 6);
+  });
+  // charging crank on the left of the receiver
+  B.part('bolt', [-0.034, 0.05, -0.07]);
+  B.tx(M.copper, 0.017, 0.008, -0.004, 0, 0, 10);
+  B.bx(M.brass, 0.006, 0.032, 0.008, -0.009, 0.016, 0);
+  B.tx(M.bakelite, 0.006, 0.02, -0.018, 0.03, 0, 6);
+  B.sel();
+  B.anchor('muzzle', 0, by, -0.79);
+  B.anchor('sight', 0, sy + 0.012, 0.0);
+  B.anchor('leftHand', 0, 0.02, -0.4);
+  return 1.1;
+}
+
+export const WEAPON_BUILDERS = {
   m1911, kar98k, m1carbine, thompson, mp40, doublebarrel: doubleBarrel, trenchgun: trenchGun,
-  bar, stg44, ppsh, mg42, panzerschreck, arcpistol: arcPistol,
+  bar, stg44, ppsh, mg42, panzerschreck, arcpistol: arcPistol, leyden,
 };
 
 // ---------------------------------------------------------------------------
@@ -1666,8 +1754,7 @@ export function buildHand(side = 'right') {
 
 /** Glowing power-up pickup (~0.4–0.5 m), centred at origin, faces +Z. */
 export function buildPowerupModel(type) {
-  const known = ['maxammo', 'instakill', 'doublepoints', 'nuke', 'carpenter'];
-  const t = known.includes(type) ? type : 'maxammo';
+  const t = RANDOM_POWERUPS.includes(type) ? type : 'maxammo';
   const g = instantiate(blueprint(`p:${t}`, () => powerupBP(t)));
   g.userData.type = t;
   return g;

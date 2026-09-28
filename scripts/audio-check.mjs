@@ -13,9 +13,14 @@ const root = path.resolve('.');
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   if (url.pathname === '/') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end('<!doctype html><title>audio</title>'); }
-  if (url.pathname !== '/src/client/audio.js') { res.writeHead(404); return res.end(); }
-  res.writeHead(200, { 'content-type': 'text/javascript' });
-  res.end(await readFile(path.join(root, 'src/client/audio.js')));
+  // The engine and the shared modules it imports (anything .js under src/).
+  const file = path.join(root, decodeURIComponent(url.pathname));
+  if (!file.startsWith(path.join(root, 'src') + path.sep) || !file.endsWith('.js')) { res.writeHead(404); return res.end(); }
+  try {
+    const body = await readFile(file);
+    res.writeHead(200, { 'content-type': 'text/javascript' });
+    res.end(body);
+  } catch { res.writeHead(404); res.end(); }
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${server.address().port}`;

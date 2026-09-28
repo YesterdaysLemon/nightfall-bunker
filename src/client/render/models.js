@@ -7,6 +7,8 @@
 //     parts:  [ { name, joint, pos: [...], nrm: [...], uv: [...], col?: [...], idx: [...] } ] }
 // Part vertices are in their joint's local space; joint positions are relative to the parent.
 // A model that fails to load resolves to null and the renderer keeps its procedural fallback.
+// `versions` ({ file: content hash }, from the build) turns each URL into
+// <file>?v=<hash>, which the server caches for a year.
 
 import * as THREE from 'three';
 
@@ -36,14 +38,15 @@ function geometryOf(p) {
   return g;
 }
 
-async function loadOne(id, base) {
-  const res = await fetch(`${base}${id}.json`);
+async function loadOne(id, base, versions) {
+  const url = (file) => `${base}${file}${versions[file] ? `?v=${versions[file]}` : ''}`;
+  const res = await fetch(url(`${id}.json`));
   if (!res.ok) throw new Error(`${id}.json: ${res.status}`);
   const data = await res.json();
   const image = async (file) => {
     const img = new Image();
     img.decoding = 'async';
-    img.src = `${base}${file}`;
+    img.src = url(file);
     await img.decode();
     return img;
   };
@@ -58,10 +61,10 @@ async function loadOne(id, base) {
 }
 
 // Resolves to { id: model | null }. Never rejects: a missing model just means fallback art.
-export async function loadModels(ids, base = '/models/') {
+export async function loadModels(ids, base = '/models/', versions = {}) {
   const out = {};
   await Promise.all(ids.map(async (id) => {
-    if (!cache.has(id)) cache.set(id, loadOne(id, base).catch((err) => { console.warn('model', id, 'unavailable:', err.message); return null; }));
+    if (!cache.has(id)) cache.set(id, loadOne(id, base, versions).catch((err) => { console.warn('model', id, 'unavailable:', err.message); return null; }));
     out[id] = await cache.get(id);
   }));
   return out;

@@ -98,6 +98,14 @@ export class Avatars {
     }
   }
 
+  // The exported Survivor, once it arrives (it loads after the menu). Players
+  // already drawn keep the fallback figure until they next appear.
+  useModel(model) {
+    if (!model || this.model) return;
+    this.model = model;
+    this.initModel(model);
+  }
+
   // --- the exported Survivor --------------------------------------------------------------
 
   initModel(model) {

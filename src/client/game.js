@@ -3,11 +3,17 @@
 
 import * as THREE from 'three';
 import { World, enemyHitTest } from '../shared/world.js';
+import { enemy } from '../shared/enemies.js';
+import { lookOf } from './enemy-looks.js';
+import { powerupName } from '../shared/powerups.js';
+import { CORE_EVENTS, HOUND_EVENTS, KINTSUGI_EVENTS, eventTable } from './events.js';
+import { TEXT, SOUND_CAPTIONS } from './text.js';
 import {
-  WINDOWS, DOORS, WALL_BUYS, MYSTERY_BOX, RADIO, LOFT_Y, MAX_BOARDS, PLAYER_SPAWNS, EGG,
+  WINDOWS, DOORS, WALL_BUYS, MYSTERY_BOX, RADIO, LOFT_Y, MAX_BOARDS, PLAYER_SPAWNS, EGG, openZones,
 } from '../shared/map.js';
-import { WEAPONS, WALL_PRICES, BOX_COST, BOX_POOL, START_WEAPON, KNIFE, GRENADE } from '../shared/weapons.js';
-import { PS, ZS, ZC, IN, PROTOCOL, PLAYER_COLORS, REGIONS } from '../shared/protocol.js';
+import { WEAPONS, WALL_PRICES, BOX_COST, BOX_POOL, START_WEAPON, KNIFE, GRENADE, shotInterval, reloadStyle } from '../shared/weapons.js';
+import { PS, ZS, ZC, IN, PROTOCOL, REGIONS } from '../shared/protocol.js';
+import { ACTIONS, bindingsOf, keyLabel } from './settings.js';
 import { EggProps } from './render/egg.js';
 import { prepareRetroTextures, setRetroTextures } from './render/retro.js';
 import { buildTeacup } from './render/kintsugi.js';
@@ -19,16 +25,21 @@ import { Zombies } from './render/zombies.js';
 import { Avatars } from './render/avatars.js';
 import { FX } from './render/fx.js';
 import { ViewModel } from './render/viewmodel.js';
+import { reloadCues } from './render/reloads.js';
 import { HUD, escapeHtml } from './hud.js';
 import { Input } from './input.js';
 import { AudioEngine } from './audio.js';
 
 const EYE = 1.62, CROUCH_EYE = 1.08, DOWN_EYE = 0.55;
+const LOOK_SCALE = 0.0022;     // radians of turn per pixel of mouse travel at sensitivity 1
+const PITCH_LIMIT = 1.52;      // just short of straight up or down
 const WALK = 4.2, SPRINT = 6.3;
 const INPUT_RATE = 1 / 20;
-const POWERUP_NAMES = { maxammo: 'Max Ammo', instakill: 'Insta-Kill', doublepoints: 'Double Points', nuke: 'Kaboom', carpenter: 'Carpenter', goldleaf: 'Gold Leaf' };
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _dir = new THREE.Vector3(), _up = new THREE.Vector3();
+
+// Sound captions point with one of eight arrows, clockwise from straight ahead.
+const ARROWS = ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖'];
 
 export class Game {
   constructor(canvas, settings, models = {}) {
@@ -39,8 +50,7 @@ export class Game {
     this.tex = createTextures(this.rig.renderer);
     // The 1997 look (art/STYLE.md): small-palette textures and the TV pass.
     prepareRetroTextures(this.tex);
-    setRetroTextures(this.tex, settings.retro !== false);
-    this.rig.setRetro(settings.retro !== false);
+    this.setCrt(settings.crt);
     this.muted = !!settings.muted;
     this.audio = new AudioEngine({ masterVolume: this.muted ? 0 : settings.volume, hrtf: settings.hrtf !== false });
     this.audio.occlusion = (x, y, z) => this.occlusionAt(x, y, z);
@@ -50,10 +60,14 @@ export class Game {
     this.fx = new FX(this.rig, this.tex, this.world, this.audio);
     this.zombies = new Zombies(this.rig, this.tex, this.audio, this.fx, models);
     this.zombies.onSpawn = (z) => this.onZombieSpawn(z);
+    this.eventHandlers = eventTable(CORE_EVENTS, HOUND_EVENTS, KINTSUGI_EVENTS);
+    this.zombies.onSound = (kind, z) => {
+      if (Math.hypot(z.x - this.p.x, z.z - this.p.z) < 14) this.caption(kind, SOUND_CAPTIONS[kind], z.x, z.z);
+    };
     this.egg = new EggProps(this.rig, this.tex, models.kintsugi);
-    this.fx.goldModel = () => { const g = buildTeacup(models.kintsugi); g.scale.setScalar(3.4); g.position.y = -0.15; return g; };
+    this.fx.goldModel = () => { const g = buildTeacup(this.models.kintsugi); g.scale.setScalar(3.4); g.position.y = -0.15; return g; };
     this.avatars = new Avatars(this.rig.scene, this.tex, models.survivor || null);
-    this.vm = new ViewModel(this.rig.renderer, this.rig.scene);
+    this.vm = new ViewModel();
     this.hud = new HUD();
     this.input = new Input(canvas);
     this.clock = new THREE.Clock();
@@ -64,25 +78,60 @@ export class Game {
     this.resetState();
     addEventListener('resize', () => this.resize());
     this.resize();
-    this.warmup();
-    this.setRetro(settings.retro !== false); // after warmup: every gun model exists now
+    this.ready = this.warmup();
+    this.applySettings(settings); // after warmup: every gun model exists now
     this.loop = this.loop.bind(this);
-    requestAnimationFrame(this.loop);
+    // Draw once the shaders are compiled, so the first frame doesn't stall on them.
+    this.ready.then(() => requestAnimationFrame(this.loop));
   }
 
-  // Compile shaders once up front so the first zombie (or hound, or her) doesn't stutter.
+  // Compile every shader before the first frame, in parallel where the browser
+  // can (KHR_parallel_shader_compile), so neither the menu nor the first zombie,
+  // hound or boss stalls on one. Resolves when they are all ready.
   warmup() {
-    const r = this.rig.renderer;
     this.rig.camera.position.set(0, 1.6, 0);
-    const fake = (cls, state) => ({ id: -1, seed: 1, cls, x: 0, y: 0, z: -3, yaw: 0, speed: 0, phase: 0, state, stateT: 0.5, killed: false, deadT: 0, stage: 0, hpFrac: 1 });
-    const Z = this.zombies;
-    Z.hounds.begin(); Z.hounds.draw(fake(ZC.HOUND, ZS.CHASE), 0.016, 0); Z.hounds.end();
-    Z.boss.draw(fake(ZC.KINTSUGI, ZS.CHASE), 0.016, 0);
-    r.compile(this.rig.scene, this.rig.camera);
-    Z.hounds.begin(); Z.hounds.end();
-    Z.boss.hide();
     for (const id of Object.keys(WEAPONS)) this.vm.model(id);
-    r.compile(this.vm.scene, this.vm.camera);
+    this.standIns(true);
+    const done = this.compileFor([[this.rig.scene, this.rig.camera], [this.vm.scene, this.vm.camera]]);
+    this.standIns(false);   // compile() has already collected their materials
+    return done.catch((err) => console.warn('shader warm-up:', err));
+  }
+
+  // Compile shaders for the render target the frames really draw into. The TV
+  // look draws into a small offscreen target, and shaders for a target differ
+  // from shaders for the screen: compiling the screen's versions would waste the
+  // warm-up and leave the first frame compiling everything again.
+  compileFor(pairs) {
+    const r = this.rig.renderer;
+    this.rig.beginFrame();
+    const done = pairs.map(([scene, camera]) => r.compileAsync(scene, camera));
+    r.setRenderTarget(null);
+    // The TV pass itself draws to the screen.
+    if (this.rig.tv) done.push(r.compileAsync(this.rig.tv.scene, this.rig.tv.camera));
+    return Promise.all(done);
+  }
+
+  // A stand-in hound and boss, so their shaders compile with everything else.
+  standIns(on) {
+    const h = this.zombies.drawers.hound, b = this.zombies.drawers.kintsugi;
+    const fake = (cls) => ({ id: -1, seed: 1, cls, x: 0, y: 0, z: -3, yaw: 0, speed: 0, phase: 0, state: ZS.CHASE, stateT: 0.5, killed: false, deadT: 0, stage: 0, hpFrac: 1 });
+    h?.begin();
+    if (on) h?.draw(fake(ZC.HOUND), 0.016, 0);
+    h?.end();
+    if (on) b?.draw(fake(ZC.KINTSUGI), 0.016, 0);
+    else b?.hide();
+  }
+
+  // Models that arrive after the menu (hounds, the Kintsugi set, other players'
+  // avatar): swap them in and compile their shaders in the background.
+  useModels(models) {
+    Object.assign(this.models, models);
+    this.zombies.useModels(models);
+    this.egg.setModel(models.kintsugi);
+    this.avatars.useModel(models.survivor);
+    this.standIns(true);
+    this.compileFor([[this.rig.scene, this.rig.camera]]).catch(() => {});
+    this.standIns(false);
   }
 
   resetState() {
@@ -142,19 +191,34 @@ export class Game {
     this.vm.resize(innerWidth / innerHeight);
   }
 
-  // The 1997 look: small-palette world textures and the TV pass. (Models and
-  // guns are always the painted low-poly versions.)
-  setRetro(on) {
-    setRetroTextures(this.tex, on);
-    this.rig.setRetro(on);
+  // The 1997 look: small-palette world textures and the TV pass, at a strength
+  // of 0 (off) to 100. (Models and guns are always the painted low-poly versions.)
+  setCrt(strength) {
+    const amt = Math.max(0, Math.min(100, Number(strength) || 0)) / 100;
+    setRetroTextures(this.tex, amt > 0);
+    this.rig.setCrt(amt);
   }
 
   applySettings(s) {
     this.settings = s;
     this.rig.setQuality(s.quality);
-    this.setRetro(s.retro !== false);
+    this.setCrt(s.crt);
     this.audio.setMasterVolume(this.muted ? 0 : s.volume);
+    this.audio.setMusicVolume(s.music ?? 0.6);
     this.audio.hrtf = s.hrtf !== false;
+    // Accessibility: calmer flashes, less camera and weapon motion.
+    this.rig.calm = !!s.reduceFlashing;
+    this.zombies.setCalm(!!s.reduceFlashing);
+    this.vm.motion = s.reduceMotion ? 0.2 : 1;
+    this.input.setBindings(bindingsOf(s), Object.fromEntries(ACTIONS.map((a) => [a.id, a.keys])));
+    this.input.setToggles({ aim: !!s.toggleAim, sprint: !!s.toggleSprint, crouch: !!s.toggleCrouch });
+    this.hud.crosshairStyle(s.crosshair, s.crossColor, s.crossDot);
+  }
+
+  // The label of the first key bound to an action ('use' -> "F"), for prompts.
+  keyName(action) {
+    const keys = bindingsOf(this.settings)[action];
+    return keys?.length ? keyLabel(keys[0]) : '?';
   }
 
   setMuted(on) {
@@ -188,10 +252,18 @@ export class Game {
     this.level.buildDoors();
   }
 
+  // Leave the match completely: nothing of it (sounds, timers, enemies, effects)
+  // carries into the menu or the next match.
   stop() {
     if (this.conn) { this.conn.close(); this.conn = null; }
+    clearTimeout(this.overTimer);
+    this.over = null;
     this.bossMusic?.stop?.();
     this.bossMusic = null;
+    this.radio?.stop?.();
+    this.radio = null;
+    this.audio.silence();
+    this.zombies.quiet = false;
     this.rig.setDread(false);
     this.zombies.clear();
     this.avatars.clear();
@@ -319,148 +391,10 @@ export class Game {
     }
   }
 
+  // Server events go to the handler groups in events.js.
   onGameEvent(e) {
-    const [type] = e;
-    const me = this.me;
-    switch (type) {
-      case 'join': this.addPlayer(e[1], e[2], e[3]); if (e[1] !== me && this.mode === 'play') this.hud.center(`${e[2]} joined`, '', 1800); break;
-      case 'leave': {
-        const pl = this.players.get(e[1]);
-        this.avatars.remove(e[1]);
-        this.hud.removePlayer(e[1]);
-        this.players.delete(e[1]);
-        if (pl && e[1] !== me) this.hud.center(`${pl.name} left`, '', 1800);
-        break;
-      }
-      case 'shot': if (e[1] !== me) this.remoteShot(e); break;
-      case 'proj': this.fx.projectile(e[1], e[3], e[4] / 100, e[5] / 100, e[6] / 100, e[7] / 100, e[8] / 100, e[9] / 100); if (e[2] !== me) this.remoteShot([0, e[2], e[3], e[4], e[5], e[6], e[7] * 10, e[8] * 10, e[9] * 10]); break;
-      case 'boom': {
-        const x = e[1] / 100, y = e[2] / 100, z = e[3] / 100;
-        if (e[4] === 'nade') this.fx.removeGrenade(e[5]); else this.fx.removeProjectile(e[5]);
-        this.fx.explosion(x, y, z, e[4]);
-        if (e[4] === 'arcpistol') this.audio.gunshot('arc', { x, y, z }); else this.audio.explosion({ x, y, z });
-        const d = Math.hypot(x - this.p.x, y - this.p.y, z - this.p.z);
-        this.shake = Math.max(this.shake, Math.max(0, 1 - d / 14) * (e[4] === 'arcpistol' ? 0.2 : 0.7));
-        break;
-      }
-      case 'nade': this.fx.throwGrenade(e[1], e[3] / 100, e[4] / 100, e[5] / 100, e[6] / 100, e[7] / 100, e[8] / 100); if (e[2] === me) this.p.grenades = e[9]; break;
-      case 'knife': if (e[1] !== me) { const pl = this.players.get(e[1]); if (pl) this.audio.knifeSwing(); } break;
-      case 'kill': this.onKill(e); break;
-      case 'pts': {
-        const pl = this.players.get(e[1]);
-        if (pl) { pl.points = e[3]; this.hud.setPlayer(e[1], pl.name, pl.slot, e[3], e[1] === me); this.hud.popPoints(e[1], e[2]); }
-        if (e[1] === me) { this.p.points = e[3]; if (e[2] < 0) this.audio.purchase(); }
-        break;
-      }
-      case 'deny': if (e[1] === me) { this.audio.denied(); this.denyT = 1.2; } break;
-      case 'give': if (e[1] === me) this.onGive(e[2], e[3].split(',')); break;
-      case 'ammo': if (e[1] === me) { const W = WEAPONS[e[2]]; this.p.ammo[e[2]] = { mag: W.mag, res: W.reserve }; } break;
-      case 'door': this.doorOpened(e[1], false); break;
-      case 'board': this.onBoard(e[1], e[2], e[3]); break;
-      case 'box': this.onBox(e); break;
-      case 'pu': this.fx.spawnPowerup(e[1], e[2], e[3] / 100, e[4] / 100, e[5] / 100); this.audio.powerupSpawn({ x: e[3] / 100, y: e[4] / 100, z: e[5] / 100 }); break;
-      case 'pug': this.onPowerup(e[1], e[2], e[3]); break;
-      case 'pux': this.fx.removePowerup(e[1]); break;
-      case 'hurt': if (e[1] === me) this.onHurt(e[2], e[3] / 100, e[4] / 100); break;
-      case 'down': {
-        const pl = this.players.get(e[1]);
-        if (e[1] !== me && pl) this.hud.center(`${pl.name} is down!`, 'Hold F near them to revive', 2500);
-        break;
-      }
-      case 'revived': {
-        if (e[1] === me) { this.hud.downed(false); }
-        break;
-      }
-      case 'bled': break;
-      case 'respawn': if (e[1] === me) this.respawn(e[2] / 100, e[3] / 100, e[4] / 100); break;
-      case 'round':
-        this.round = e[1];
-        this.hud.setRound(e[1], true);
-        this.audio.roundStart(e[1]);
-        break;
-      case 'rend':
-        if (e[2]) { this.rig.setDread(false); (this.audio.houndRoundEnd || this.audio.roundEnd).call(this.audio, e[1]); }
-        else this.audio.roundEnd(e[1]);
-        break;
-      case 'hounds':
-        this.rig.setDread(true);
-        this.audio.houndRoundStart?.();
-        this.hud.center('The hounds are loose', 'Back to a wall. Watch each other.', 3600, 'dread');
-        this.shake = Math.max(this.shake, 0.2);
-        break;
-      case 'strike': {
-        const x = e[1] / 100, y = e[2] / 100, z = e[3] / 100;
-        this.fx.lightning(x, y, z);
-        this.audio.lightning?.({ x, y: y + 1, z });
-        const d = Math.hypot(x - this.p.x, z - this.p.z);
-        this.shake = Math.max(this.shake, Math.max(0, 1 - d / 12) * 0.35);
-        break;
-      }
-      case 'zatk': {
-        const z = this.zombies.get(e[1]);
-        if (!z) break;
-        if (z.cls === ZC.HOUND) z.voice = z.state === ZS.WARP ? this.audio.houndBark?.({ x: z.x, y: z.y + 0.6, z: z.z }, z.seed) : this.audio.houndBite?.({ x: z.x, y: z.y + 0.6, z: z.z });
-        else if (z.cls === ZC.KINTSUGI) this.audio.bossAttack?.({ x: z.x, y: z.y + 1.5, z: z.z });
-        else z.voice = this.audio.zombieAttack({ x: z.x, y: z.y + 1.5, z: z.z }, z.seed);
-        break;
-      }
-      case 'zspawn':
-        if (e[2] === ZC.KINTSUGI) {
-          this.hud.center('Kintsugi', 'Broken things were mended with gold', 4200, 'gold');
-          if (!this.bossMusic) this.bossMusic = this.audio.bossMusic?.() || null;
-        }
-        break;
-      case 'cup': {
-        const pos = this.egg.breakCup(e[1]);
-        if (pos) {
-          this.fx.porcelain(pos[0], pos[1] + 0.06, pos[2], 0.25, 0.35);
-          this.audio.teacupBreak?.({ x: pos[0], y: pos[1], z: pos[2] }, e[1]);
-        }
-        break;
-      }
-      case 'egg': {
-        const f = EGG.figurine.pos;
-        const fp = { x: f[0], y: f[1] + 0.15, z: f[2] };
-        if (e[1] === 'ready') {
-          this.eggStage = 'ready';
-          this.egg.setStage('ready');
-          this.audio.figurineChime?.(fp);
-          this.chimeT = 2.7;
-        } else if (e[1] === 'wake') {
-          this.eggStage = 'awake';
-          this.egg.setStage('awake');
-          this.fx.porcelain(fp.x, fp.y, fp.z, 0.5, 0.5);
-          this.audio.figurineWake?.(fp);
-          this.hud.center('Something stirs…', '', 3000, 'gold');
-          this.flashWhite = Math.max(this.flashWhite || 0, 0.25);
-        }
-        break;
-      }
-      case 'kshatter': {
-        const x = e[2] / 100, y = e[3] / 100, z = e[4] / 100;
-        this.fx.porcelain(x, y + 1.0, z, 1.2, 1.3);
-        this.audio.bossShatter?.({ x, y: y + 1, z });
-        break;
-      }
-      case 'kreform': {
-        const x = e[2] / 100, y = e[3] / 100, z = e[4] / 100;
-        this.fx.reform(x, y, z);
-        this.audio.bossReform?.({ x, y: y + 1, z });
-        break;
-      }
-      case 'kstage': {
-        const z = this.zombies.get(e[1]);
-        if (z) {
-          this.fx.porcelain(z.x, z.y + 1.4, z.z, 0.6, 0.8);
-          this.audio.bossScream?.({ x: z.x, y: z.y + 1.6, z: z.z });
-        }
-        break;
-      }
-      case 'chat': { const pl = this.players.get(e[1]); if (pl) this.hud.chat(pl.name, e[2], PLAYER_COLORS[pl.slot % 4]); break; }
-      case 'radio': this.radio?.stop?.(); this.radio = this.audio.radioSong({ x: RADIO.pos[0], y: RADIO.pos[1], z: RADIO.pos[2] }); break;
-      case 'over': this.onOver(e[1], e[2]); break;
-      default:
-    }
+    const handlers = this.eventHandlers.get(e[0]);
+    if (handlers) for (const fn of handlers) fn.call(this, e, this.me);
   }
 
   // --- Event handlers ------------------------------------------------------------------------
@@ -474,35 +408,23 @@ export class Game {
   onKill(e) {
     const [, zid, by, kind, x100, y100, z100, ang] = e;
     const z = this.zombies.kill(zid, kind, ang / 100);
-    const x = x100 / 100, y = y100 / 100, zz = z100 / 100;
-    const dx = Math.sin(ang / 100), dz = Math.cos(ang / 100);
-    if (z?.cls === ZC.HOUND) {
-      this.fx.houndBurst(x, y, zz);
-      this.audio.houndDeath?.({ x, y: y + 0.6, z: zz }, z.seed);
-      if (kind === 1 && by === this.me) this.audio.headshot({ x, y: y + 0.6, z: zz });
-      return;
-    }
-    if (z?.cls === ZC.KINTSUGI) {
-      this.fx.porcelain(x, y + 1.0, zz, 2.5, 1.6);
-      this.audio.bossDeath?.({ x, y: y + 1, z: zz });
-      this.bossMusic?.stop?.();
-      this.bossMusic = null;
-      this.bossId = null;
-      this.hud.boss(null);
-      this.eggStage = 'done';
-      this.hud.center('Kintsugi is broken', 'Something golden fell where she stood', 4500, 'gold');
-      this.shake = Math.max(this.shake, 0.5);
-      return;
-    }
-    if (kind === 1) {
-      this.fx.blood(x, y + 1.65, zz, dx * 0.5, 0.6, dz * 0.5, 2.5);
-      if (by === this.me) this.audio.headshot({ x, y: y + 1.6, z: zz });
-    } else if (kind === 2) {
-      this.fx.blood(x, y + 1.0, zz, dx, 0.8, dz, 2.5);
-    } else if (kind === 3) {
-      this.fx.blood(x, y + 1.2, zz, 0, 1, 0, 1);
-    }
-    this.audio.zombieDeath({ x, y: y + 1.4, z: zz }, z ? z.seed : zid);
+    const cls = z ? z.cls : ZC.WALKER;
+    lookOf(cls).kill(this, {
+      x: x100 / 100, y: y100 / 100, z: z100 / 100, kind, dx: Math.sin(ang / 100), dz: Math.cos(ang / 100),
+      mine: by === this.me, seed: z ? z.seed : zid,
+    });
+    if (enemy(cls).boss) this.onBossKilled();
+  }
+
+  // The Kintsugi fight ends: music, boss bar, the easter egg is done.
+  onBossKilled() {
+    this.bossMusic?.stop();
+    this.bossMusic = null;
+    this.bossId = null;
+    this.hud.boss(null);
+    this.eggStage = 'done';
+    this.hud.center(TEXT.bossKilled, TEXT.bossKilledSub, 4500, 'gold');
+    this.shake = Math.max(this.shake, 0.5);
   }
 
   onGive(w, list) {
@@ -548,12 +470,28 @@ export class Game {
     }
   }
 
+  // A caption for a sound, with an arrow toward it (relative to where the player
+  // faces). Each kind shows at most every 1.8 s so a horde does not flood the screen.
+  caption(key, text, x, z) {
+    if (!this.settings.captions || this.mode !== 'play') return;
+    const now = performance.now(), last = (this._capT ||= {});
+    if (now - (last[key] || 0) < 1800) return;
+    last[key] = now;
+    let arrow = '';
+    if (x != null) {
+      const dx = x - this.p.x, dz = z - this.p.z, s = Math.sin(this.p.yaw), c = Math.cos(this.p.yaw);
+      const ahead = -dx * s - dz * c, right = dx * c - dz * s;
+      arrow = ARROWS[((Math.round(Math.atan2(right, ahead) / (Math.PI / 4)) % 8) + 8) % 8];
+    }
+    this.hud.caption(text, arrow);
+  }
+
   onPowerup(id, type, pid) {
     this.fx.removePowerup(id);
     if (type === 'goldleaf' && this.audio.goldLeaf) this.audio.goldLeaf();
     else this.audio.powerupGrab(type);
-    if (!this.muted) this.audio.announce(POWERUP_NAMES[type] || type);
-    this.hud.center(POWERUP_NAMES[type] || type, '', 1800);
+    if (!this.muted) this.audio.announce(powerupName(type));
+    this.hud.center(powerupName(type), '', 1800);
     if (type === 'maxammo') {
       for (const w of Object.keys(this.p.ammo)) this.p.ammo[w].res = WEAPONS[w].reserve;
     } else if (type === 'nuke') {
@@ -578,9 +516,15 @@ export class Game {
     this.bossMusic?.stop?.();
     this.bossMusic = null;
     this.hud.boss(null);
+    // The world goes quiet behind the game-over sting: no heartbeat, wind or groans.
+    this.audio.stopAmbience(3);
+    this.radio?.stop?.();
+    this.radio = null;
+    this.zombies.quiet = true;
     this.audio.gameOver();
     this.hud.center('Game over', `You survived ${round} round${round === 1 ? '' : 's'}`, 6000);
-    setTimeout(() => { if (this.over) this.onEvent({ type: 'over', over: this.over }); }, 3500);
+    clearTimeout(this.overTimer);
+    this.overTimer = setTimeout(() => { if (this.over) this.onEvent({ type: 'over', over: this.over }); }, 3500);
   }
 
   respawn(x, y, z) {
@@ -611,7 +555,7 @@ export class Game {
     const muzzle = this.avatars.muzzlePos(pid, _v2) || o;
     this.fx.muzzleWorld(muzzle.x, muzzle.y, muzzle.z);
     this.audio.gunshot(W.sound, { x: muzzle.x, y: muzzle.y, z: muzzle.z });
-    if (W.projectile) return;
+    if (W.projectile || W.chain) return;   // their own events draw them ('proj', 'chain')
     const n = [0, 0, 0];
     for (let i = 0; i < Math.min(W.pellets, 4); i++) {
       const s = W.spread;
@@ -658,10 +602,9 @@ export class Game {
     const dur = W.reload;
     p.reloadT = dur;
     p.reloadDur = dur;
-    const style = W.kind === 'bolt' ? 'bolt' : p.cur === 'doublebarrel' ? 'break' : W.pump ? 'pump' : 'mag';
+    const style = reloadStyle(W);
     this.vm.reload(dur, style);
-    const snd = style === 'bolt' ? ['bolt', 'shell', 'shell', 'bolt'] : style === 'pump' ? ['shell', 'shell', 'shell', 'bolt'] : style === 'break' ? ['out', 'shell', 'in'] : ['out', 'in', 'bolt'];
-    p.reloadEvents = snd.map((s, i) => ({ at: dur * (0.2 + (i / Math.max(1, snd.length - 1)) * 0.7), s }));
+    p.reloadEvents = reloadCues(style).map(([u, s]) => ({ at: dur * u, s }));
   }
 
   finishReload() {
@@ -724,7 +667,7 @@ export class Game {
       return;
     }
     a.mag--;
-    p.fireT = 60 / W.rpm;
+    p.fireT = shotInterval(p.cur);
     this.fire(W);
   }
 
@@ -740,14 +683,16 @@ export class Game {
     const o = cam.position;
     cam.getWorldDirection(_dir);
     const muzzle = this.vm.muzzleWorld(cam, _v2);
-    this.vm.fire(p.cur);
+    this.vm.fire(p.cur, p.ammo[p.cur]?.mag ?? 1);
     this.audio.gunshot(W.sound);
-    this.rig.muzzleFlash(muzzle, W.kind === 'wonder' ? 0.3 : 1);
+    if (W.kind === 'wonder') this.rig.muzzleFlash(muzzle, W.chain ? 1.6 : 0.4, 0x8fd8ff, W.chain ? 0.1 : 0.05);
+    else this.rig.muzzleFlash(muzzle, 1);
     p.recoilPitch += W.kick * (1 - ads * 0.5) * 0.9;
     if (W.projectile) {
       this.conn.send({ t: 'proj', w: p.cur, o: [o.x + _dir.x * 0.4, o.y + _dir.y * 0.4 - 0.05, o.z + _dir.z * 0.4], d: [_dir.x, _dir.y, _dir.z] });
       return;
     }
+    if (W.chain) return this.fireChain(W, o, _dir, muzzle);
     const hits = [];
     const n = [0, 0, 0];
     const right = _v.set(1, 0, 0).applyQuaternion(cam.quaternion);
@@ -778,10 +723,7 @@ export class Game {
         const [t, id, part] = zh[i];
         hits.push([id, part]);
         const hx = o.x + ux * t, hy = o.y + uy * t, hz = o.z + uz * t;
-        const hitCls = this.zombies.get(id)?.cls;
-        if (hitCls === ZC.KINTSUGI) this.fx.porcelain(hx, hy, hz, 0.12, 0.25);
-        else if (hitCls === ZC.HOUND) { this.fx.blood(hx, hy, hz, ux, uy, uz, 0.5); this.fx.add.emit(hx, hy, hz, ux, 1, uz, 1, 0.5, 0.1, 1, 0.08, 0.3, 2, 1); }
-        else this.fx.blood(hx, hy, hz, ux, uy, uz, part === 0 ? 1.4 : 0.8);
+        lookOf(this.zombies.get(id)?.cls).hit(this, hx, hy, hz, [ux, uy, uz], part);
         this.audio.impactFlesh({ x: hx, y: hy, z: hz });
         if (i === maxPen - 1) endT = t;
       }
@@ -791,6 +733,56 @@ export class Game {
       }
     }
     this.conn.send({ t: 'fire', w: p.cur, o: [o.x, o.y, o.z], d: [_dir.x, _dir.y, _dir.z], h: hits });
+  }
+
+  // Chain lightning: claim the enemy nearest the aim line (W.chain.aim metres of
+  // forgiveness, never through walls) and draw the first bolt at once. The server
+  // picks the hops and sends the whole path back (onChain).
+  fireChain(W, o, d, muzzle) {
+    const wallT = this.world.raycast(o.x, o.y, o.z, d.x, d.y, d.z, W.range);
+    let best = null, bs = Infinity;
+    this.zombies.forEachTarget((id, zx, zy, zz, st, cls, yaw) => {
+      const my = zy + enemy(cls).mid;
+      const vx = zx - o.x, vy = my - o.y, vz = zz - o.z;
+      const t = vx * d.x + vy * d.y + vz * d.z;
+      if (t < 0.3 || t > W.range) return;
+      const direct = enemyHitTest(cls, o.x, o.y, o.z, d.x, d.y, d.z, zx, zy, zz, yaw, wallT);
+      const off = direct ? 0 : Math.hypot(vx - d.x * t, vy - d.y * t, vz - d.z * t);
+      if (off > W.chain.aim + t * 0.02) return;
+      const score = off + t * 0.01;   // direct hits first, then whoever is nearest the line
+      if (score >= bs || (!direct && !this.world.lineOfSight(o.x, o.y, o.z, zx, my, zz))) return;
+      bs = score;
+      best = [id, zx, my, zz];
+    });
+    if (this.eggStage === 'cups') {
+      const cup = this.egg.hitTest(o.x, o.y, o.z, d.x, d.y, d.z, wallT);
+      if (cup >= 0) this.conn.send({ t: 'cup', i: cup, o: [o.x, o.y, o.z], d: [d.x, d.y, d.z] });
+    }
+    const from = [muzzle.x, muzzle.y, muzzle.z];
+    const to = best ? best.slice(1) : [o.x + d.x * wallT, o.y + d.y * wallT, o.z + d.z * wallT];
+    this.chainClaim = best ? best[0] : 0;
+    this.fx.chain(2, (i) => (i ? to : from), 0, (i, b) => this.audio.zap({ x: b[0], y: b[1], z: b[2] }, 0));
+    this.conn.send({ t: 'fire', w: this.p.cur, o: [o.x, o.y, o.z], d: [d.x, d.y, d.z], h: best ? [[best[0], 1]] : [] });
+  }
+
+  // The server's chain-lightning path: bolts fork enemy to enemy, `delay` apart,
+  // following each enemy while it still stands. The local shooter already drew
+  // the first bolt when it claimed the same enemy (or hit nothing).
+  onChain(e, me) {
+    const [, pid, w, ids, pts, from] = e;
+    const C = WEAPONS[w]?.chain;
+    if (!C || !Array.isArray(ids) || !Array.isArray(pts) || pts.length < 6) return;
+    const P = [];
+    for (let i = 0; i + 2 < pts.length; i += 3) P.push([pts[i] / 100, pts[i + 1] / 100, pts[i + 2] / 100]);
+    const mine = pid === me;
+    const m = mine ? this.vm.muzzleWorld(this.rig.camera, _v2) : this.avatars.muzzlePos(pid, _v2);
+    if (m) P[0] = [m.x, m.y, m.z];
+    const at = (i) => {
+      const z = i > 0 ? this.zombies.get(ids[i - 1]) : null;
+      return z ? [z.x, z.y + enemy(z.cls).mid, z.z] : P[i];
+    };
+    const skip = mine && (!ids.length || ids[0] === this.chainClaim) ? 1 : 0;
+    this.fx.chain(P.length, at, C.delay, (i, b) => this.audio.zap({ x: b[0], y: b[1], z: b[2] }, i), skip, Array.isArray(from) ? from : null);
   }
 
   knife() {
@@ -803,17 +795,18 @@ export class Game {
     const cam = this.rig.camera;
     cam.getWorldDirection(_dir);
     let best = null, bd = KNIFE.range + 0.3;
-    this.zombies.forEachTarget((id, zx, zy, zz, st) => {
+    this.zombies.forEachTarget((id, zx, zy, zz, st, cls) => {
       const dx = zx - p.x, dz = zz - p.z;
       const d = Math.hypot(dx, dz);
-      if (d > bd || Math.abs(zy - p.y) > 1.3 || st === ZS.RISE || st === ZS.WARP) return;
+      if (d > bd || Math.abs(zy - p.y) > 1.3 || st === ZS.RISE) return;
       const dot = (dx * _dir.x + dz * _dir.z) / (d * Math.hypot(_dir.x, _dir.z) || 1);
       if (dot < 0.55 && d > 0.6) return;
-      best = { id, zx, zy, zz }; bd = d;
+      best = { id, zx, zy, zz, cls }; bd = d;
     });
     if (best) {
-      this.fx.blood(best.zx, best.zy + 1.3, best.zz, _dir.x, 0.2, _dir.z, 1.2);
-      this.audio.knifeHit({ x: best.zx, y: best.zy + 1.3, z: best.zz });
+      const fy = best.zy + enemy(best.cls).fxY;
+      this.fx.blood(best.zx, fy, best.zz, _dir.x, 0.2, _dir.z, 1.2);
+      this.audio.knifeHit({ x: best.zx, y: fy, z: best.zz });
       // Lunge a little toward the target.
       p.vx += _dir.x * 3; p.vz += _dir.z * 3;
     }
@@ -837,14 +830,14 @@ export class Game {
     const near = (x, y, z, r) => Math.hypot(p.x - x, p.z - z) <= r && Math.abs(p.y - y) < 1.4;
     for (const pl of this.players.values()) {
       if (pl.id === this.me || pl.state !== PS.DOWN) continue;
-      if (near(pl.x, pl.y, pl.z, 1.6)) return { kind: 'revive', hold: true, label: `Hold <b>F</b> to revive ${escapeHtml(pl.name)}`, short: `Revive ${pl.name}`, pl };
+      if (near(pl.x, pl.y, pl.z, 1.6)) return { kind: 'revive', hold: true, label: TEXT.revive(this.keyName('use'), escapeHtml(pl.name)), short: `Revive ${pl.name}`, pl };
     }
     const B = MYSTERY_BOX;
-    if (this.openDoors.has('debrisA') || this.openDoors.has('debrisB')) {
+    if (openZones(this.openDoors).has(B.zone)) {   // the same rule as the server's
       if (near(B.pos[0], B.pos[1], B.pos[2], 2.1)) {
         const bs = this.boxState;
-        if (bs.state === 'ready' && bs.owner === this.me) return { kind: 'boxTake', label: `Press <b>F</b> to take the ${WEAPONS[bs.weapon].name}`, short: `Take ${WEAPONS[bs.weapon].name}` };
-        if (bs.state === 'idle') return { kind: 'box', label: `Press <b>F</b> for a random weapon <span class="cost">[Cost: ${BOX_COST}]</span>`, short: `Mystery box · ${BOX_COST}`, cost: BOX_COST };
+        if (bs.state === 'ready' && bs.owner === this.me) return { kind: 'boxTake', label: TEXT.boxTake(this.keyName('use'), WEAPONS[bs.weapon].name), short: `Take ${WEAPONS[bs.weapon].name}` };
+        if (bs.state === 'idle') return { kind: 'box', label: TEXT.box(this.keyName('use'), BOX_COST), short: `Mystery box · ${BOX_COST}`, cost: BOX_COST };
       }
     }
     for (const wb of WALL_BUYS) {
@@ -855,26 +848,26 @@ export class Game {
       const W = WEAPONS[wb.weapon];
       const price = WALL_PRICES[wb.weapon];
       if (p.weapons.includes(wb.weapon)) {
-        return { kind: 'wall', id: wb.id, label: `Press <b>F</b> to buy ${W.name} ammo <span class="cost">[Cost: ${Math.round(price / 2)}]</span>`, short: `Ammo · ${Math.round(price / 2)}`, cost: Math.round(price / 2) };
+        return { kind: 'wall', id: wb.id, label: TEXT.buyAmmo(this.keyName('use'), W.name, Math.round(price / 2)), short: `Ammo · ${Math.round(price / 2)}`, cost: Math.round(price / 2) };
       }
-      return { kind: 'wall', id: wb.id, label: `Press <b>F</b> to buy ${W.name} <span class="cost">[Cost: ${price}]</span>`, short: `${W.name} · ${price}`, cost: price };
+      return { kind: 'wall', id: wb.id, label: TEXT.buyGun(this.keyName('use'), W.name, price), short: `${W.name} · ${price}`, cost: price };
     }
     for (const d of DOORS) {
       if (this.openDoors.has(d.id)) continue;
       if (d.use.some((u) => near(u[0], u[1], u[2], 2.3))) {
         const verb = d.kind === 'door' ? 'open the door' : 'clear the debris';
-        return { kind: 'door', id: d.id, label: `Press <b>F</b> to ${verb} <span class="cost">[Cost: ${d.cost}]</span>`, short: `${d.kind === 'door' ? 'Open door' : 'Clear debris'} · ${d.cost}`, cost: d.cost };
+        return { kind: 'door', id: d.id, label: TEXT.openDoor(this.keyName('use'), verb, d.cost), short: `${d.kind === 'door' ? 'Open door' : 'Clear debris'} · ${d.cost}`, cost: d.cost };
       }
     }
     for (const w of WINDOWS) {
       if (this.boards[w.id] >= MAX_BOARDS) continue;
-      if (near(w.repair[0], w.repair[1], w.repair[2], 1.3)) return { kind: 'repair', hold: true, label: 'Hold <b>F</b> to rebuild the barrier', short: 'Hold to rebuild' };
+      if (near(w.repair[0], w.repair[1], w.repair[2], 1.3)) return { kind: 'repair', hold: true, label: TEXT.rebuild(this.keyName('use')), short: 'Hold to rebuild' };
     }
     if (near(RADIO.pos[0], 0, RADIO.pos[2], 1.6)) return { kind: 'radio', label: '', short: 'Radio' };
     // The figurine only answers once all three teacups are broken.
     if (this.eggStage === 'ready') {
       const f = EGG.figurine.pos;
-      if (near(f[0], 0, f[2], 2.0)) return { kind: 'egg', label: 'Press <b>F</b> to touch the figurine', short: 'Touch the figurine' };
+      if (near(f[0], 0, f[2], 2.0)) return { kind: 'egg', label: TEXT.figurine(this.keyName('use')), short: 'Touch the figurine' };
     }
     return null;
   }
@@ -910,12 +903,13 @@ export class Game {
     let best = null, bestAng = CONE;
     this.zombies.forEachTarget((id, zx, zy, zz, st, cls) => {
       if (st === ZS.RISE) return;
-      const vx = zx - o.x, vy = zy + (cls === ZC.HOUND ? 0.55 : 1.35) - o.y, vz = zz - o.z;
+      const aimY = enemy(cls).aimY;
+      const vx = zx - o.x, vy = zy + aimY - o.y, vz = zz - o.z;
       const d = Math.hypot(vx, vy, vz);
       if (d > 28 || d < 0.5) return;
       const ang = Math.acos(Math.max(-1, Math.min(1, (vx * _dir.x + vy * _dir.y + vz * _dir.z) / d)));
       if (ang >= bestAng) return;
-      if (!this.world.lineOfSight(o.x, o.y, o.z, zx, zy + (cls === ZC.HOUND ? 0.55 : 1.35), zz)) return;
+      if (!this.world.lineOfSight(o.x, o.y, o.z, zx, zy + aimY, zz)) return;
       bestAng = ang;
       best = { vx, vy, vz };
     });
@@ -955,12 +949,12 @@ export class Game {
     if (active) {
       const assist = I.touchMode && S.touchAssist !== false ? this.aimAssist(dt) : null;
       const friction = assist ? assist.friction : 1;
-      p.yaw -= I.mouse.dx * 0.0022 * S.sensitivity * zoom * friction;
-      p.pitch -= I.mouse.dy * 0.0022 * S.sensitivity * zoom * friction * (S.invert ? -1 : 1);
+      p.yaw -= I.mouse.dx * LOOK_SCALE * S.sensitivity * zoom * friction;
+      p.pitch -= I.mouse.dy * LOOK_SCALE * S.sensitivity * zoom * friction * (S.invert ? -1 : 1);
       p.yaw += I.lookRad.yaw;
       p.pitch += I.lookRad.pitch * (S.invert ? -1 : 1);
       if (assist) { p.yaw += assist.dyaw; p.pitch += assist.dpitch; }
-      p.pitch = Math.max(-1.52, Math.min(1.52, p.pitch));
+      p.pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, p.pitch));
     }
     const down = p.state === PS.DOWN, dead = p.state === PS.DEAD;
     let fx = 0, fz = 0;
@@ -974,13 +968,14 @@ export class Game {
     // Keyboard diagonals normalise to 1; a half-pushed stick walks slower.
     const len = Math.hypot(fx, fz);
     if (len > 1) { fx /= len; fz /= len; }
-    const crouchKey = active && (I.down('KeyC') || I.down('ControlLeft'));
+    const crouchKey = active && I.crouchHeld();
     p.crouch += ((crouchKey || down ? 1 : 0) - p.crouch) * Math.min(1, dt * 10);
     const W = WEAPONS[p.cur];
-    const ads = active && I.mouse.right && !down;
-    p.sprinting = active && !down && (I.down('ShiftLeft') || I.touchSprint) && fz < 0 && !ads && p.stamina > 0 && p.reloadT <= 0;
+    const ads = active && I.aiming() && !down;
+    if (fz >= 0) I.endSprint();
+    p.sprinting = active && !down && I.sprintHeld() && fz < 0 && !ads && p.stamina > 0 && p.reloadT <= 0;
     if (p.sprinting) p.stamina = Math.max(0, p.stamina - dt);
-    else p.stamina = Math.min(4, p.stamina + dt * (I.down('ShiftLeft') ? 0.3 : 0.9));
+    else p.stamina = Math.min(4, p.stamina + dt * (I.sprintHeld() ? 0.3 : 0.9));
     let speed = p.sprinting ? SPRINT : WALK;
     if (ads) speed *= 0.55;
     speed *= 1 - p.crouch * 0.5;
@@ -1014,15 +1009,16 @@ export class Game {
     const hs = Math.hypot(p.vx, p.vz);
     if (p.onGround && hs > 1 && !down) {
       p.lastStep += dt * hs;
-      if (p.lastStep > (p.sprinting ? 2.4 : 1.9)) { p.lastStep = 0; this.audio.footstep(p.y > 0.05 && p.y < LOFT_Y - 0.1 ? 'wood' : 'wood'); }
+      if (p.lastStep > (p.sprinting ? 2.4 : 1.9)) { p.lastStep = 0; this.audio.footstep('wood'); }
     }
 
     // Camera.
     const eye = down ? DOWN_EYE : EYE - p.crouch * (EYE - CROUCH_EYE);
     p.eye += (eye - p.eye) * Math.min(1, dt * 12);
     p.recoilPitch *= Math.exp(-dt * 9);
-    const bob = p.onGround ? Math.sin(performance.now() / 1000 * (p.sprinting ? 13 : 9)) * 0.025 * Math.min(1, hs / WALK) * (1 - this.vm.ads) : 0;
-    const shake = this.shake * this.shake;
+    const still = S.reduceMotion ? 0 : 1;
+    const bob = still * (p.onGround ? Math.sin(performance.now() / 1000 * (p.sprinting ? 13 : 9)) * 0.025 * Math.min(1, hs / WALK) * (1 - this.vm.ads) : 0);
+    const shake = still * this.shake * this.shake;
     this.shake = Math.max(0, this.shake - dt * 1.6);
     cam.position.set(p.x, p.y + p.eye + p.eyeSmooth + bob, p.z);
     cam.rotation.set(
@@ -1033,7 +1029,7 @@ export class Game {
     const baseFov = S.fov;
     const W2 = WEAPONS[p.cur];
     const adsFov = W2 ? Math.min(baseFov, baseFov * (W2.adsFov / 70)) : baseFov;
-    const fovTarget = baseFov + (adsFov - baseFov) * this.vm.ads + (p.sprinting ? 5 : 0);
+    const fovTarget = baseFov + (adsFov - baseFov) * this.vm.ads + (p.sprinting ? 5 * still : 0);
     cam.fov += (fovTarget - cam.fov) * Math.min(1, dt * 12);
     cam.updateProjectionMatrix();
 
@@ -1098,6 +1094,7 @@ export class Game {
     const p = this.p;
     const W = WEAPONS[p.cur];
     const a = p.ammo[p.cur] || { mag: 0, res: 0 };
+    this.vm.setRounds(a.mag);
     this.vm.update(dt, this.vmState);
     this.hud.setAmmo(W ? W.name : '', a.mag, a.res, W ? W.mag : 1);
     this.hud.setGrenades(p.grenades);
@@ -1106,7 +1103,7 @@ export class Game {
     const low = p.state === PS.ALIVE ? Math.max(0, 1 - p.hp / 60) : p.state === PS.DOWN ? 0.9 : 0;
     this.hurtLevel = Math.max(low, this.hurtLevel - dt * 0.8);
     this.hud.hurt(this.hurtLevel);
-    this.audio.setHeartbeat(p.state === PS.ALIVE ? Math.max(0, 1 - p.hp / 45) : p.state === PS.DOWN ? 0.8 : 0);
+    this.audio.setHeartbeat(this.over ? 0 : p.state === PS.ALIVE ? Math.max(0, 1 - p.hp / 45) : p.state === PS.DOWN ? 0.8 : 0);
     if (p.state === PS.DOWN && this.phase !== 'over') this.hud.downed(true, Math.max(0, (this.myBleed ?? 30) / 30));
     else if (this.phase === 'over') this.hud.downed(false);
     const showBoard = this.input.down('Tab');
@@ -1136,6 +1133,7 @@ export class Game {
       if (this.chimeT <= 0 && Math.hypot(p.x - f[0], p.z - f[2]) < 16) {
         this.chimeT = 2.7;
         this.audio.figurineChime?.({ x: f[0], y: f[1] + 0.15, z: f[2] });
+        this.caption('chime', SOUND_CAPTIONS.chime, f[0], f[2]);
       }
     }
   }
@@ -1151,7 +1149,8 @@ export class Game {
 
   render() {
     const r = this.rig.renderer;
-    r.toneMappingExposure = 1.15 + (this.flashWhite || 0) * 4;
+    const S = this.settings;
+    r.toneMappingExposure = 1.15 * (S.brightness ?? 1) + (this.flashWhite || 0) * (S.reduceFlashing ? 0.6 : 4);
     this.rig.beginFrame();
     r.render(this.rig.scene, this.rig.camera);
     if (this.mode === 'play' && this.p.state !== PS.DEAD) {

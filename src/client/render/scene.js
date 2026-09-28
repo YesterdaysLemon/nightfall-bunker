@@ -82,8 +82,11 @@ export class SceneRig {
   }
 
   // The 1997 look: render into a small target and let the TV pass present it.
-  setRetro(on) {
-    this.retro = !!on;
+  // amt 0..1 is the player's TV effect strength: 0 is off, and weaker settings
+  // also render more lines, so the picture sharpens as the effect fades.
+  setCrt(amt) {
+    this.crt = Math.max(0, Math.min(1, amt));
+    this.retro = this.crt > 0;
     if (this.retro && !this.tv) {
       this.tv = makeTvPass();
       this.rt = new THREE.WebGLRenderTarget(4, 4, { type: THREE.HalfFloatType, depthBuffer: true, stencilBuffer: false });
@@ -92,6 +95,7 @@ export class SceneRig {
       this.rt.texture.generateMipmaps = false;
       this.tv.material.uniforms.tScene.value = this.rt.texture;
     }
+    if (this.tv) this.tv.material.uniforms.uAmt.value = this.crt;
     this.resize();
   }
 
@@ -119,7 +123,8 @@ export class SceneRig {
     this.renderer.setSize(w, h, false);
     if (this.retro && this.rt) {
       // A fixed number of lines (fewer while frames run long), width by aspect.
-      const lines = Math.max(200, Math.round(this.q.lines * (0.55 + this.dynScale * 0.45)));
+      const sharpen = 1 + (1 - this.crt) * 1.1;
+      const lines = Math.min(Math.round(h * ratio), Math.max(200, Math.round(this.q.lines * sharpen * (0.55 + this.dynScale * 0.45))));
       const rw = Math.round(lines * (w / h));
       this.rt.setSize(rw, lines);
       this.tv.material.uniforms.uRes.value.set(rw, lines);
@@ -143,15 +148,17 @@ export class SceneRig {
     if (prev !== this.dynScale) this.resize();
   }
 
-  muzzleFlash(pos, strength = 1) {
+  // A short point-light flash: gunfire (warm) or an electric arc (pass a blue colour).
+  muzzleFlash(pos, strength = 1, color = 0xffc27a, time = 0.05) {
     this.flash.position.copy(pos);
-    this.flash.intensity = 5 * strength;
-    this.flashT = 0.05;
+    this.flash.color.setHex(color);
+    this.flash.intensity = 5 * strength * (this.calm ? 0.5 : 1);
+    this.flashT = time;
   }
 
   explosionFlash(pos) {
     this.boom.position.copy(pos);
-    this.boom.intensity = 60;
+    this.boom.intensity = this.calm ? 22 : 60;
     this.boomT = 0.45;
   }
 
@@ -184,7 +191,9 @@ export class SceneRig {
       } else {
         const n = Math.sin(time * 2.3 + b.seed) * Math.sin(time * 5.1 + b.seed * 0.7);
         const flick = b.flicker + dr * 0.8;
-        const cut = flick > 0.5 && Math.sin(time * (0.9 + dr * 1.7) + b.seed) > 0.97 - dr * 0.06 ? (Math.sin(time * 60) > 0 ? 0.1 : 1) : 1;
+        // A failing bulb stutters; with reduced flashing it only dims.
+        const failing = flick > 0.5 && Math.sin(time * (0.9 + dr * 1.7) + b.seed) > 0.97 - dr * 0.06;
+        const cut = !failing ? 1 : this.calm ? 0.6 : Math.sin(time * 60) > 0 ? 0.1 : 1;
         k = (0.92 + 0.08 * n * flick) * cut * (1 - dr * 0.42);
       }
       b.level = k;
@@ -194,7 +203,7 @@ export class SceneRig {
     if (this.boltT > 0) {
       this.boltT -= dt;
       const u = Math.max(0, this.boltT) / 0.42;
-      const flick = u > 0.75 ? 1 : u > 0.6 ? 0.15 : u > 0.45 ? 0.8 : u * 1.4;
+      const flick = this.calm ? u * 0.3 : u > 0.75 ? 1 : u > 0.6 ? 0.15 : u > 0.45 ? 0.8 : u * 1.4;
       this.bolt.intensity = 140 * flick;
       if (this.boltT <= 0) this.bolt.intensity = 0;
     }
@@ -204,7 +213,7 @@ export class SceneRig {
     }
     if (this.boomT > 0) {
       this.boomT -= dt;
-      this.boom.intensity = Math.max(0, this.boomT / 0.45) * 60;
+      this.boom.intensity = Math.max(0, this.boomT / 0.45) * (this.calm ? 22 : 60);
     }
     this.sky.position.copy(this.camera.position);
   }

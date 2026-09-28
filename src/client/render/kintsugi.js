@@ -13,14 +13,15 @@
 // parts. Without it everything falls back to the procedural version (canvas textures).
 
 import * as THREE from 'three';
-import { ZS as ZSP } from '../../shared/protocol.js';
+import { ZS, ZC } from '../../shared/protocol.js';
+import { enemy } from '../../shared/enemies.js';
+import { mulberry32 as rng } from '../../shared/rng.js';
 
-const ZS = { CHASE: ZSP.CHASE ?? 4, ATTACK: ZSP.ATTACK ?? 5, SHATTER: ZSP.SHATTER ?? 7, REFORM: ZSP.REFORM ?? 8 };
 const TAU = Math.PI * 2;
 const DENS = 1.5;          // print tiles per metre on the boss
 // Plain texel patches (uv) for unprinted parts: glossy glaze / matte hollow.
 const FLAT = { gloss: [0.031, 0.969], matte: [0.094, 0.969] };
-const ATTACK_T = 0.45, REFORM_T = 0.6, BURST_FADE = 0.52;
+const ATTACK_T = enemy(ZC.KINTSUGI).melee.windup, REFORM_T = enemy(ZC.KINTSUGI).reformTime, BURST_FADE = 0.52;
 const STOP_FPS = 7;
 
 const PC = {
@@ -32,16 +33,6 @@ const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a
 const lerp = (a, b, t) => a + (b - a) * t;
 const clamp01 = (x) => Math.min(1, Math.max(0, x));
 function hash1(n) { const h = Math.sin(n * 127.1 + 311.7) * 43758.5453; return h - Math.floor(h); }
-function rng(seed) {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 // --- Shared kit: glaze textures, environment, materials --------------------------------
 let KIT = null;

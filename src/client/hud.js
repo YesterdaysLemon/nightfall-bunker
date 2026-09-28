@@ -2,6 +2,7 @@
 
 import { drawTally } from './render/chalk.js';
 import { PLAYER_COLORS } from '../shared/protocol.js';
+import { powerupName } from '../shared/powerups.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -28,6 +29,8 @@ export class HUD {
     this.net = $('netinfo');
     this.chatlog = $('chatlog');
     this.board = $('scoreboard');
+    this.captions = $('captions');
+    this.armLen = 9;
     this.round = -1;
     this.last = {};
     this.centerT = null;
@@ -100,12 +103,24 @@ export class HUD {
     this.promptEl.innerHTML = html;
   }
 
+  // Size: small / medium / large arms; colour; an optional centre dot.
+  crosshairStyle(size, color, dot) {
+    const [len, w] = { small: [6, 2], medium: [9, 2], large: [13, 3] }[size] || [9, 2];
+    this.armLen = len;
+    this.cross.style.setProperty('--ch-len', `${len}px`);
+    this.cross.style.setProperty('--ch-w', `${w}px`);
+    this.cross.style.setProperty('--ch-color', color || '#f0ece2');
+    this.cross.classList.toggle('dot', !!dot);
+    this.last.cs = null;
+  }
+
   crosshair(spreadPx, visible) {
     const s = Math.round(spreadPx);
     if (this.last.cs !== s) {
       const [a, b, c, d] = this.cross.children;
-      a.style.left = `${-9 - s}px`; b.style.left = `${s}px`;
-      c.style.top = `${-9 - s}px`; d.style.top = `${s}px`;
+      const L = this.armLen;
+      a.style.left = `${-L - s}px`; b.style.left = `${s}px`;
+      c.style.top = `${-L - s}px`; d.style.top = `${s}px`;
       this.last.cs = s;
     }
     if (this.last.cv !== visible) { this.cross.classList.toggle('hide', !visible); this.last.cv = visible; }
@@ -116,8 +131,8 @@ export class HUD {
     if (this.last.pu === key) return;
     this.last.pu = key;
     const items = [];
-    if (insta > 0) items.push(['Insta-Kill', insta]);
-    if (dbl > 0) items.push(['Double Points', dbl]);
+    if (insta > 0) items.push([powerupName('instakill'), insta]);
+    if (dbl > 0) items.push([powerupName('doublepoints'), dbl]);
     this.pus.replaceChildren(...items.map(([label, t]) => {
       const d = document.createElement('div');
       d.className = t <= 5 ? 'pu blink' : 'pu';
@@ -184,6 +199,21 @@ export class HUD {
     this.bossEl.querySelector('.bar i').style.width = `${(Math.max(0, Math.min(1, frac)) * 100).toFixed(1)}%`;
   }
 
+  // Sound captions: a short line with an arrow toward the sound; the newest three stay.
+  caption(text, arrow = '') {
+    const d = document.createElement('div');
+    if (arrow) {
+      const a = document.createElement('span');
+      a.className = 'arrow';
+      a.textContent = arrow;
+      d.append(a);
+    }
+    d.append(document.createTextNode(text));
+    this.captions.append(d);
+    while (this.captions.children.length > 3) this.captions.firstChild.remove();
+    setTimeout(() => d.remove(), 3200);
+  }
+
   netinfo(text) {
     if (this.last.net !== text) { this.net.textContent = text; this.last.net = text; }
   }
@@ -217,6 +247,7 @@ export class HUD {
     this.revive(null);
     this.hurt(0);
     this.boss(null);
+    this.captions.replaceChildren();
   }
 }
 

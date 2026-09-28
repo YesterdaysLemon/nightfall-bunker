@@ -316,7 +316,7 @@ export class Level {
     // ladders at both ends
     for (const lx of [B.x0 + 0.5, B.x1 - 0.5]) {
       for (const dx of [-0.25, 0.25]) w.tbox(mat(lx + dx, B.y / 2 + 0.3, B.z0 - 0.12, 0, -0.08), 0.06, B.y + 0.9, 0.06, 0.45, 1);
-      for (let y = 0.3; y < B.y + 0.6; y += 0.32) w.tbox(mat(lx, y, B.z0 - 0.12 + y * -0.0, 0), 0.5, 0.04, 0.05, 0.5, 1);
+      for (let y = 0.3; y < B.y + 0.6; y += 0.32) w.tbox(mat(lx, y, B.z0 - 0.12, 0), 0.5, 0.04, 0.05, 0.5, 1);
     }
   }
 

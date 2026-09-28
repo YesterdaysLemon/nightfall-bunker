@@ -133,6 +133,23 @@ try {
     if (!quick && results.last.round < 2) errors.push(`round 1 not cleared (round ${results.last.round}, phase ${results.last.phase}, state ${results.last.state})`);
     if (results.last.points < 600) errors.push(`too few points earned (${results.last.points})`);
     results.mode = quick ? 'quick' : 'full';
+
+    // Quitting to the menu leaves nothing of the match behind: no zombies, no
+    // ambience or heartbeat, and no sound still playing or starting afterwards.
+    await game(() => document.getElementById('btnQuit').click());
+    await page.waitForTimeout(1500);
+    const left = await game(() => {
+      const g = window.__game, a = g.audio;
+      return {
+        mode: g.mode, zombies: g.zombies.list.size + g.zombies.dying.length, over: g.over,
+        audioRunning: a.ctx?.state === 'running', ambience: !!a._amb, heartbeat: a._hb || 0,
+        voices: (a.voices || []).filter((v) => !v.dying).length,
+      };
+    });
+    results.afterQuit = left;
+    if (left.mode !== 'menu' || left.zombies || left.over || left.ambience || left.heartbeat || left.voices) {
+      errors.push(`the match leaked into the menu: ${JSON.stringify(left)}`);
+    }
   }
 } catch (err) {
   errors.push(`harness: ${err.message}`);

@@ -3,15 +3,12 @@
 // low-resolution frame into a soft composite picture instead of hard squares.
 
 import * as THREE from 'three';
+import { mulberry32 as rng } from '../../shared/rng.js';
 
 // --- Textures -----------------------------------------------------------------------------
 
 const BAYER4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5].map((v) => (v + 0.5) / 16 - 0.5);
 
-function rng(seed) {
-  let a = seed >>> 0;
-  return () => { a = (a + 0x6d2b79f5) >>> 0; let t = Math.imul(a ^ (a >>> 15), a | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
-}
 
 // Small k-means palette over the opaque pixels.
 function palette(px, k, seed) {
@@ -127,6 +124,7 @@ export function setRetroTextures(tex, on) {
 // the screen: rows stay crisp and become scanlines, each row is softened
 // horizontally with a little colour bleed like composite video, then the
 // picture is tone-mapped and reduced to 15-bit colour with an ordered dither.
+// uAmt (0..1, the player's "TV effect strength") scales every one of those steps.
 
 export function makeTvPass() {
   const material = new THREE.ShaderMaterial({
@@ -135,6 +133,7 @@ export function makeTvPass() {
       uRes: { value: new THREE.Vector2(640, 400) },
       uScan: { value: 0.16 },
       uDither: { value: 1 },
+      uAmt: { value: 1 },
     },
     vertexShader: /* glsl */`
       varying vec2 vUv;
@@ -145,6 +144,7 @@ export function makeTvPass() {
       uniform vec2 uRes;
       uniform float uScan;
       uniform float uDither;
+      uniform float uAmt;
       varying vec2 vUv;
       float bayer(vec2 p) {
         vec2 q = mod(p, 4.0);
@@ -161,12 +161,14 @@ export function makeTvPass() {
         // Crisp rows, soft columns.
         float row = floor(vUv.y * uRes.y);
         vec2 uv = vec2(vUv.x, (row + 0.5) * px.y);
-        vec3 c = texture2D(tScene, uv).rgb * 0.46
+        vec3 sharp = texture2D(tScene, uv).rgb;
+        vec3 c = sharp * 0.46
           + (texture2D(tScene, uv - vec2(px.x * 0.8, 0.0)).rgb + texture2D(tScene, uv + vec2(px.x * 0.8, 0.0)).rgb) * 0.22
           + (texture2D(tScene, uv - vec2(px.x * 1.7, 0.0)).rgb + texture2D(tScene, uv + vec2(px.x * 1.7, 0.0)).rgb) * 0.05;
+        c = mix(sharp, c, uAmt);
         // Composite colour bleed: red leans left, blue right.
-        c.r = mix(c.r, texture2D(tScene, uv - vec2(px.x * 1.2, 0.0)).r, 0.35);
-        c.b = mix(c.b, texture2D(tScene, uv + vec2(px.x * 1.2, 0.0)).b, 0.35);
+        c.r = mix(c.r, texture2D(tScene, uv - vec2(px.x * 1.2, 0.0)).r, 0.35 * uAmt);
+        c.b = mix(c.b, texture2D(tScene, uv + vec2(px.x * 1.2, 0.0)).b, 0.35 * uAmt);
         gl_FragColor = vec4(c, 1.0);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
@@ -176,16 +178,16 @@ export function makeTvPass() {
         float luma = dot(g, vec3(0.299, 0.587, 0.114));
         g = mix(vec3(luma), g, 0.8);
         g *= mix(vec3(0.84, 0.96, 0.9), vec3(1.05, 1.0, 0.9), smoothstep(0.08, 0.65, luma));
-        gl_FragColor.rgb = g * 0.95 + vec3(0.018, 0.022, 0.02);
+        gl_FragColor.rgb = mix(gl_FragColor.rgb, g * 0.95 + vec3(0.018, 0.022, 0.02), uAmt);
         // Scanlines: darken the gap between rows a little.
         float f = fract(vUv.y * uRes.y);
-        float scan = 1.0 - uScan * smoothstep(0.18, 0.5, abs(f - 0.5));
+        float scan = 1.0 - uScan * uAmt * smoothstep(0.18, 0.5, abs(f - 0.5));
         // 15-bit colour with an ordered dither on the virtual pixel grid.
         vec2 vp = floor(vUv * uRes);
-        vec3 q = floor(gl_FragColor.rgb * 31.0 + 0.5 + bayer(vp) * uDither) / 31.0;
+        vec3 q = mix(gl_FragColor.rgb, floor(gl_FragColor.rgb * 31.0 + 0.5 + bayer(vp) * uDither) / 31.0, uAmt);
         // A soft vignette, like the curved edge of a tube.
         vec2 d = vUv - 0.5;
-        float vig = 1.0 - dot(d, d) * 0.35;
+        float vig = 1.0 - dot(d, d) * 0.35 * uAmt;
         gl_FragColor = vec4(clamp(q, 0.0, 1.0) * scan * vig, 1.0);
       }
     `,

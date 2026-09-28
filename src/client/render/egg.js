@@ -9,6 +9,7 @@ import { buildFigurine, buildTeacup } from './kintsugi.js';
 export class EggProps {
   constructor(rig, tex, model = null) {
     this.rig = rig;
+    this.model = model;
     this.group = new THREE.Group();
     rig.scene.add(this.group);
     this.cups = EGG.cups.map((c) => {
@@ -36,6 +37,24 @@ export class EggProps {
     this.stage = 'cups';
     this.glow = 0;
     this.time = 0;
+  }
+
+  // The painted cups and figurine, once the Kintsugi model arrives (it loads after
+  // the menu). Keeps which cups are broken and the egg's stage.
+  setModel(model) {
+    if (!model || this.model) return;
+    this.model = model;
+    const swap = (old, fresh) => {
+      fresh.position.copy(old.position);
+      fresh.rotation.copy(old.rotation);
+      fresh.visible = old.visible;
+      this.group.remove(old);
+      this.group.add(fresh);
+      return fresh;
+    };
+    for (const c of this.cups) c.g = swap(c.g, buildTeacup(model));
+    this.figurine = swap(this.figurine, buildFigurine(model));
+    this.setStage(this.stage);
   }
 
   // Match the server's state (session start / late join).

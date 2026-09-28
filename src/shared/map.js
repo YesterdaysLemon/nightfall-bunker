@@ -109,6 +109,13 @@ export const EGG = {
   boss: [-10.4, 0, -1.4],
 };
 
+// The zones players can reach once these doors are open (the start zone always).
+export function openZones(openDoorIds) {
+  const zones = new Set(['start']);
+  for (const d of DOORS) if (openDoorIds.has(d.id)) for (const z of d.opens) zones.add(z);
+  return zones;
+}
+
 export function zoneAt(x, y, z) {
   if (y > SLAB_BOTTOM - 0.4) return 'loft';
   if (x < -6) return 'help';
@@ -322,3 +329,21 @@ export const EXTERIOR = {
   runway: { z0: 30, z1: 46, x0: -120, x1: 120 },
   hangar: { pos: [-40, 0, 52], size: [34, 14, 22] },
 };
+
+// --- The map as one object ----------------------------------------------------------
+// Everything the rules, collision and navigation need from a map, in one place.
+// GameSim({ map }), new World(map) and new NavGrid(map) take one of these (the
+// bunker by default). A second map is a module that exports an object of the same
+// shape (see docs/EXTENDING.md); the client renderers still read the bunker's
+// named exports directly, which is the next step for multiple maps.
+export const BUNKER = {
+  id: 'bunker', name: 'Airfield Bunker',
+  T, LOFT_Y, SLAB_BOTTOM, ROOF_Y, ROOF_TOP, BX0, BX1, BZ0, BZ1, IX0, IX1, IZ0, IZ1,
+  ZONES, WINDOWS, MAX_BOARDS, STAIRS, DOORS, WALL_BUYS, MYSTERY_BOX, PLAYER_SPAWNS, RADIO, EGG,
+  BALCONY, SPAWNS, LIGHTS, FURNITURE, EXTERIOR, STAIR_HOLES,
+  openZones, zoneAt, stairFootprint, stairHeightAt, buildStaticBoxes, windowBlockers,
+  worldBounds: [-24, -14, 20, 14],   // collision hash extent [x0, z0, x1, z1], outside set dressing included
+};
+
+export const MAPS = { bunker: BUNKER };
+export const DEFAULT_MAP = 'bunker';

@@ -29,8 +29,8 @@ const TYPES = {
 };
 
 const CSP = [
-  "default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-  "font-src 'self' https://fonts.gstatic.com", "img-src 'self' data: blob:", "connect-src 'self'",
+  "default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline'",
+  "font-src 'self'", "img-src 'self' data: blob:", "connect-src 'self'",
   "media-src 'self' blob:", "object-src 'none'", "base-uri 'none'", "frame-ancestors 'self' https://claude.ai",
 ].join('; ');
 
@@ -74,11 +74,20 @@ async function serveStatic(req, res, url) {
   try { st = await stat(file); } catch { st = null; }
   if (!st || !st.isFile()) return json(res, 404, { error: 'not found' });
   const ext = path.extname(file);
-  const immutable = rel.startsWith('/assets/');
+  // Hashed build assets, and model files asked for by content hash (?v=), never
+  // change at their URL: cache them for a year. Everything else revalidates, and
+  // an unchanged file answers 304 instead of being sent again.
+  const immutable = rel.startsWith('/assets/') || (rel.startsWith('/models/') && url.searchParams.has('v'));
+  const modified = st.mtime.toUTCString();
+  if (!immutable && req.headers['if-modified-since'] === modified) {
+    res.writeHead(304, { 'cache-control': 'no-cache', 'last-modified': modified });
+    return res.end();
+  }
   res.writeHead(200, {
     'content-type': TYPES[ext] || 'application/octet-stream',
     'content-length': st.size,
     'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
+    'last-modified': modified,
     'x-content-type-options': 'nosniff',
     'referrer-policy': 'strict-origin-when-cross-origin',
     ...(ext === '.html' ? { 'content-security-policy': CSP, 'permissions-policy': 'camera=(), microphone=(), geolocation=()' } : {}),

@@ -24,17 +24,33 @@ Round-based co-op zombie survival FPS (1–4 players) in Three.js, a homage to
 the classic first "zombies" map: a boarded-up airfield bunker at night, chalk
 wall-buys, a mystery box, debris to clear, and rounds tallied in red chalk.
 Keep it an original homage: no Call of Duty names, logos, audio or map names.
-Real WWII weapon names are fine; the wonder weapon is the original Arc Pistol.
+Real WWII weapon names are fine; the wonder weapons are the original Arc Pistol
+and Leyden Rifle.
 
 ## Layout
 
-- `src/shared/` — runtime-agnostic game core used by browser, Worker and Node:
-  `map.js` (single source of level data), `world.js` (AABB collision, raycasts,
-  hitboxes), `nav.js` (2-level grid + flow field), `sim.js` (authoritative
-  rules), `weapons.js`, `protocol.js` (constants, region choice).
+`docs/EXTENDING.md` has the recipes for adding an enemy, gun, power-up,
+encounter, setting or map, and for re-theming. Content is data in registries,
+and the tests check each registry is complete.
+
+- `src/shared/` — the runtime-agnostic game core, used by the browser, the Worker and Node:
+  - `sim.js`: the authoritative rules. Special content plugs in as encounters (hooks listed at its top).
+  - `encounters/`: `hounds.js` (hound rounds) and `kintsugi.js` (the easter egg and boss).
+  - `enemies.js`: per-class data (hit volumes, speeds, melee, AI, look).
+  - `weapons.js`: each gun's price, box weight, grip, reload and projectile.
+  - `powerups.js`.
+  - `map.js`: the bunker's level data, also as one `BUNKER` object in `MAPS`.
+  - `world.js`: AABB collision, raycasts, data-driven hit volumes.
+  - `nav.js`: a two-level grid and flow field.
+  - Rules, world and nav all take a map. Also `rounds.js`, `rng.js` (the one
+    seeded generator), `wire.js` and `protocol.js`.
 - `src/net/rooms.js` — transport-agnostic `MatchRoom` / `PartyRoom`.
-- `src/client/` — renderer and UI. Everything visual/audio is procedural
+- `src/client/` — renderer and UI. Everything visual and audible is procedural
   (`render/textures.js`, `render/weapons3d.js`, `render/chalk.js`, `audio.js`).
+  - `game.js`: routes server events to handler groups in `events.js`.
+  - `enemy-looks.js`: each enemy family's sounds and effects.
+  - `text.js`: the words players read.
+  - `settings.js` / `settings-ui.js`: settings, key bindings and the settings sheet.
 - `worker/index.js` — Cloudflare Worker + Durable Objects (`Party`, `Match`,
   `Beacon`, `Directory`) serving `/net/*` on the game hostname.
 - `server/index.mjs` — VPS container: static `dist/`, `/healthz`, and an
@@ -49,6 +65,10 @@ Real WWII weapon names are fine; the wonder weapon is the original Arc Pistol.
     unlocked zone 4.5–10 m from a player, with at most 2 + 2 × players alive at
     once.
   - They bite for 25, die in a few shots, and burst into flame.
+  - They are drawn at `HOUND_SCALE` (1.3, `enemies.js`) times the model. Their hit
+    volumes (skull, snout, ears, body, legs) scale with it and are padded to be
+    forgiving; a test keeps every vertex of the standing model inside them.
+    Aim assist, splash and the spawn and death effects use `HOUND_MID`.
   - The last hound always drops a Max Ammo, and random drops are off for the round.
 - **Kintsugi easter egg.** Break three gold-mended teacups (`EGG.cups` in
   `map.js`): by the radio, on the loft desk, and on a courtyard post seen
@@ -62,9 +82,50 @@ Real WWII weapon names are fine; the wonder weapon is the original Arc Pistol.
     takes half splash damage.
   - Killing her drops Gold Leaf: the Arc Pistol for the grabber, and +1000
     points and full grenades for everyone.
-- Enemy classes and states live in `protocol.js` (`ZC`, `ZS`). Hounds use
-  `houndHitTest` (yaw-aware). Client renderers: `render/hounds.js`,
-  `render/kintsugi.js`, and `render/egg.js` for the props.
+- Enemy classes and states live in `protocol.js` (`ZC`, `ZS`), and their data in
+  `enemies.js`. Client renderers: `render/hounds.js`, `render/kintsugi.js`,
+  and `render/egg.js` for the props.
+
+## Guns
+
+- **Leyden Rifle** (`leyden`, box only): chain lightning (`chain` in `weapons.js`).
+  - The bolt hits the enemy nearest the aim line (the client forgives aim by
+    `chain.aim`). Then it forks: each hop leaves from whichever struck enemy is
+    nearest a fresh one it can see within `reach`, for up to `hops` enemies.
+  - Hops land `delay` s apart (`GameSim.arcs`). It kills anything but a boss,
+    which takes `bossDamage`. Kills are `KILL.SHOCK`: the body fries, then drops.
+  - The `chain` event carries the whole path. Three jars hold three shots and go
+    dark as they are spent; reloading swaps the jar rack and cranks it up.
+- **Animation:** `render/reloads.js` holds every reload style and after-shot cycle
+  as keyframes over progress, played by `render/viewmodel.js`.
+  - Styles: mag, pistol, stripper-clip bolt, shell-by-shell pump, break action,
+    rocket and jar.
+  - Both hands leave the gun, cases eject, recoil is a spring, and an empty
+    pistol locks its slide.
+  - `game.js` plays the style's sound cues. `tests/reloads.test.js` checks every
+    gun has a style.
+- **Dev builds and `?test`:** `?give=<gun id>` (e.g. `?give=leyden`) hands you that
+  gun when a solo game starts.
+
+## Settings and accessibility
+
+- The settings sheet opens from the menu and the pause menu. It docks right so
+  the game shows behind it, and changes apply live. Its tabs:
+  - **Video:** TV effect strength 0–100, where 0 is off and a weaker effect
+    also renders more lines; brightness; field of view; graphics quality.
+  - **Audio:** master and music volume, 3D audio, sound captions.
+  - **Controls:** sensitivity, invert, toggle aim/sprint/crouch, and key
+    rebinding (`Input.setBindings` maps physical keys onto the codes the game checks).
+  - **Accessibility:**
+    - text and HUD size (rem-based, `--ui`)
+    - high-contrast HUD
+    - crosshair size, colour and dot
+    - reduce flashing (softer lightning, explosions, white-outs and bulb flicker; no hound warp flicker)
+    - reduce motion (no shake or bob, less sway)
+    - sound captions with direction arrows
+  - **Touch:** touch-device options.
+- Reduce flashing and reduce motion default on when the OS asks for reduced motion.
+- Settings are stored in `nb_settings`. The old `retro` on/off migrates to `crt`.
 
 ## Netcode decisions
 
@@ -102,6 +163,12 @@ Real WWII weapon names are fine; the wonder weapon is the original Arc Pistol.
   (`?test` only).
 - `npm run audio-check` — silent: renders the audio engine offline and asserts
   direction (HRTF), distance falloff, wall occlusion and moving zombie voices.
+- `node scripts/guns-smoke.mjs [--only kar98k,leyden]` (after a build) — headless,
+  muted:
+  - a contact sheet of every gun's reload, frozen at eight points
+    (`output/guns/reloads.png`)
+  - the Leyden Rifle firing down a row of zombies: the chain must kill them all
+    and a spent jar must go dark.
 - `node scripts/mp-smoke.mjs --url <site>` — two headless browsers create and
   join a lobby, start a match and check they see each other (works on prod).
 - `npm run build:worker` — bundles the Worker to `dist-worker/index.js`.
@@ -116,7 +183,16 @@ Real WWII weapon names are fine; the wonder weapon is the original Arc Pistol.
   (+ optional `_glow.png`). They are loaded at boot by
   `src/client/render/models.js` (`loadModels`, `buildJoints`). Missing models
   fall back to the procedural art.
-  - `ghoul`: in-game zombie, built from `art/zombies/z_ps1c.py`, used by `zombies.js`.
+  - The horde (`zombies.js`, one instanced batch per model): `ghoul` (`z_ps1c.py`)
+    plus three that each borrow something the owner liked.
+    - `mended` (`z_mended.py`): a mechanic with Kintsugi's gold-mended porcelain.
+    - `stoker` (`z_stoker.py`): an ember-cracked brute.
+    - `gasser` (`z_gasser.py`): a gas-mask runner in the Rotted style's green.
+    - `render/zombie-models.js` weights each per class (Mended mostly walk,
+      Stoker jog, Gasser run). The pick comes from the zombie's id, so it is
+      cosmetic and every client agrees.
+    - Glow pages light the seams, embers and eyes. Model meta names the parts
+      that go with the head on a headshot.
   - `hound`: `z_hound.py`, used by `hounds.js`.
   - `kintsugi`: boss, figurine and teacup; `z_kintsugi.py`, used by `kintsugi.js` and `egg.js`.
 - **Render** (`src/client/render/retro.js`, setting "1997 TV look", on by default):
@@ -148,8 +224,72 @@ Real WWII weapon names are fine; the wonder weapon is the original Arc Pistol.
   next design round.
   `--record` copies the hero renders into `art/zombies/renders/`.
 
+## Model Workshop (the owner's model editor)
+
+- A claude.ai Artifact (https://claude.ai/artifact/CrK7J1ghGBWK6jZQjZZW27) that
+  loads `public/models/*` for Spore-style editing. Its five modes:
+  - **Mold:** push/pull, swell, smooth, and scroll-to-size.
+  - **Rig:** pose with the game's own animations, or move joints.
+  - **Tris:** move vertices, delete triangles, or poke points.
+  - **Parts:** snap on spikes, horns, fins, blobs, boxes and teeth.
+  - **Paint:** texture notes, tints and page adjustments.
+- Source: `art/lab/workshop.html` and `art/lab/editops.mjs` (the replayable edit
+  engine, tested in `tests/editops.test.js`). `node art/lab/build-lab.mjs` builds
+  `output/lab/`. Republish that page with the model files as supporting files.
+- The owner's edits live in the artifact's db, one document per model:
+  `labs/<id>` = `{ rev, ops, notes, tints, page }`. Treat the notes as art direction.
+- **Baking.** `node art/lab/bake.mjs <id> <doc.json> --rev <tag>` replays a document's
+  ops into the game model, exactly as the page previewed them.
+  - It sets `meta.revs[id]` / `meta.rev` and records the ops in `art/lab/edits/`.
+  - The page sets aside ops whose `rev` no longer matches the model (kept in
+    `stale`, not applied).
+  - Page adjustments are not baked yet, and tints are preview only.
+- The ghoul and hound are at rev `lab1`, the owner's first sculpt. The hound's
+  shared legs are now explicit `.L`/`.R` parts.
+
+## Loading, caching and sessions
+
+Measured on 2026-09-27 (cold start, this PC's GPU): the menu's first frames went from 3.2 s to 2.2 s.
+
+- **Caching.** Models load as `/models/<file>?v=<content hash>`. The hashes come
+  from the `virtual:model-versions` plugin in `vite.config.js`; dev builds load
+  unversioned.
+  - `server/index.mjs` caches versioned models and `/assets/` for a year, immutable.
+  - Everything else revalidates, answering 304 when unchanged.
+  - Cloudflare Tiered Cache (Smart topology) is on for the whole `alirezaafshan.com` zone.
+  - Cloudflare does not cache JSON at the edge by default. A cache rule for
+    `/models/*` would need the owner's OK, since it is a zone setting.
+- **What the menu waits for.** Only the four horde models.
+  - Hounds, the Kintsugi set and the survivor avatar load alongside and are
+    swapped in by `Game.useModels`.
+  - The hound and boss renderers are built lazily (`Zombies.drawer`), from the
+    procedural fallback if one is needed before its model arrives.
+- **Shader warm-up** (`Game.warmup`, `compileFor`). Shaders compile in parallel
+  (`compileAsync`) before the first frame, for the render target the frames
+  really draw into.
+  - With the TV look on, that is the small offscreen target, and its shader
+    variants differ from the screen's. Compiling for the screen used to double
+    every compile.
+  - There is no environment map: every material is Lambert, Phong or unlit. The
+    PMREM it had cost half a second and did nothing.
+- **Fonts** are self-hosted (`src/client/fonts/`, hashed into `/assets/`; licences
+  in `public/fonts/`). The CSP allows only 'self'.
+- **Leaving a match** (`Game.stop`) silences everything it started (`AudioEngine.silence`):
+  - voices, ambience, the radio, boss music, and the heartbeat and muffle
+  - the game-over timer
+
+  At game over the world goes quiet behind the sting. `npm run smoke` checks
+  that nothing leaks into the menu.
+- **Multiplayer "errors."** The Durable Object analytics count a WebSocket ended
+  by a player leaving as an error (`clientDisconnected`, 7–24 a day). The
+  Worker itself reports none; this is normal.
+
 ## Deployment
 
+- VPS routing: Caddy keeps one file per site. This site's is
+  `/etc/caddy/sites/zombies.alirezaafshan.com.caddy`, imported by `/etc/caddy/Caddyfile`,
+  with history in git at `/etc/caddy`. Edit only that file, then validate, commit and
+  reload; never restore a whole-config backup.
 - Site: Deploy Manager app `zombies` → `https://zombies.alirezaafshan.com`,
   repo `YesterdaysLemon/nightfall-bunker` (`main`), container port 8080,
   loopback 3290 (candidate 3291), health `/healthz` (reports the build SHA).

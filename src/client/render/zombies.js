@@ -1,13 +1,15 @@
-// Zombies: one template rig drives 12 InstancedMeshes (one per body part)
-// so every zombie on screen costs 13 draw calls total. Procedural animation;
+// Zombies: each cosmetic model owns one reusable template rig and a fixed
+// pool of InstancedMeshes (one per body part), shared by its live and dead horde. Procedural animation;
 // snapshot interpolation; death falls and headshot gore.
 
 import * as THREE from 'three';
-import { GeoBuilder, rng } from './geo.js';
-import { ZS, ZC } from '../../shared/protocol.js';
+import { rng } from './geo.js';
+import { ZS, ZC, KILL } from '../../shared/protocol.js';
 import { Hounds } from './hounds.js';
 import { KintsugiBoss } from './kintsugi.js';
 import { buildJoints } from './models.js';
+import { ZOMBIE_MODELS, zombieModelId, zombiePartFlags } from './zombie-models.js';
+import { enemy, UNTOUCHABLE } from '../../shared/enemies.js';
 
 const CAP = 48;
 const CLOTH = 0, SKIN = 1;
@@ -77,14 +79,25 @@ export class Zombies {
     this.dying = [];
     this.time = 0;
     this.interpDelay = 110;
-    // Hounds and the porcelain boss ride the same snapshot rows but draw themselves.
-    this.hounds = new Hounds(rig.scene, tex, models.hound || null);
-    this.boss = new KintsugiBoss(rig.scene, tex, models.kintsugi || null);
-    this.ghoul = models.ghoul || null;
+    // Families that draw themselves, by enemies.js `look` (the zombie horde is drawn
+    // here). Each has draw(z, dt, time) and optionally begin(), end(), hide().
+    // Hounds and the boss only appear minutes in, and main.js loads their models
+    // after the menu: each is built when its model arrives (useModels), or from the
+    // procedural fallback if one is needed first.
+    this.drawers = {};
+    this.factories = {
+      hound: (m) => Object.assign(new Hounds(rig.scene, tex, m || null), { calm: this.calm }),
+      kintsugi: (m) => new KintsugiBoss(rig.scene, tex, m || null),
+    };
+    this.calm = false;        // reduce flashing (hound warp flicker)
+    this.useModels(models);
     this.bossInfo = { stage: 0, hpFrac: 1 };
-
-    if (this.ghoul) this.buildFromModel(this.ghoul, rig);
-    else this.buildProcedural(tex, rig);
+    this.quiet = false;       // game over: no new voices
+    this.batches = new Map();
+    this.batches.set('ghoul', models.ghoul ? this.buildFromModel(models.ghoul, rig) : this.buildProcedural(tex, rig));
+    for (const id of Object.keys(ZOMBIE_MODELS)) {
+      if (id !== 'ghoul' && models[id]) this.batches.set(id, this.buildFromModel(models[id], rig));
+    }
     this._m = new THREE.Matrix4();
     this._q = new THREE.Quaternion();
     this._qy = new THREE.Quaternion();
@@ -152,15 +165,15 @@ export class Zombies {
     const elL = J('elL', shL, 0, -0.33, 0), elR = J('elR', shR, 0, -0.33, 0);
     const hipL = J('hipL', hips, 0.1, -0.04, 0), hipR = J('hipR', hips, -0.1, -0.04, 0);
     const knL = J('knL', hipL, 0, -0.46, 0), knR = J('knR', hipR, 0, -0.46, 0);
-    this.rigJ = { root, body, hips, spine, neck, shL, shR, elL, elR, hipL, hipR, knL, knR };
+    const rigJ = { root, body, hips, spine, neck, shL, shR, elL, elR, hipL, hipR, knL, knR };
 
-    const parts = [
+    const defsWithJoints = [
       ['pelvis', hips], ['torso', spine], ['head', neck], ['eyes', neck], ['helmet', neck],
       ['upperArm', shL], ['upperArm', shR], ['lowerArm', elL], ['lowerArm', elR],
       ['upperLeg', hipL], ['upperLeg', hipR], ['lowerLeg', knL], ['lowerLeg', knR],
     ];
     const eyeMat = new THREE.MeshBasicMaterial({ color: 0xffb347 });
-    this.parts = parts.map(([geoName, joint], i) => {
+    const parts = defsWithJoints.map(([geoName, joint]) => {
       const im = new THREE.InstancedMesh(defs[geoName], geoName === 'eyes' ? eyeMat : material, CAP);
       im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       im.frustumCulled = false;
@@ -171,35 +184,63 @@ export class Zombies {
       rig.scene.add(im);
       return { im, joint, name: geoName, hat: geoName === 'helmet' ? 2 : 0, head: geoName === 'head' || geoName === 'eyes' || geoName === 'helmet', skin: geoName === 'head' };
     });
+    return { rigJ, parts, count: 0 };
   }
 
-  // The painted low-poly Ghoul: one instanced mesh per exported part, driven by
+  // The painted low-poly horde: one instanced mesh per exported part, driven by
   // the same joint names as the procedural rig so every animation still applies.
   buildFromModel(model, rig) {
     const nodes = buildJoints(model);
     const J = (n) => nodes[n] || nodes.body;
-    this.rigJ = {
+    const rigJ = {
       root: nodes.root, body: J('body'), hips: J('hips'), spine: J('spine'), neck: J('neck'),
       shL: J('shL'), shR: J('shR'), elL: J('elL'), elR: J('elR'), hipL: J('hipL'), hipR: J('hipR'), knL: J('knL'), knR: J('knR'),
     };
-    const lit = new THREE.MeshLambertMaterial({ map: model.texture });
-    const litV = new THREE.MeshLambertMaterial({ map: model.texture, vertexColors: true });
+    const glow = { emissive: model.emissive ? 0xffffff : 0x000000, emissiveMap: model.emissive,
+      emissiveIntensity: model.meta.glow?.emissiveIntensity ?? ZOMBIE_MODELS[model.id]?.glow ?? 0.5 };
+    const lit = new THREE.MeshLambertMaterial({ map: model.texture, ...glow });
+    const litV = new THREE.MeshLambertMaterial({ map: model.texture, vertexColors: true, ...glow });
     // Eyes stay faintly lit in the dark so zombies read at a distance.
     const eyeMat = new THREE.MeshBasicMaterial({ map: model.texture, color: 0xffe2b0 });
-    this.parts = [];
+    const eyeMatV = eyeMat.clone();
+    eyeMatV.vertexColors = true;
+    const parts = [];
     for (const part of model.parts.values()) {
       const joint = nodes[part.joint];
       if (!joint) continue;
-      const eyes = part.name === 'eyes';
-      const im = new THREE.InstancedMesh(part.geometry, eyes ? eyeMat : part.hasColor ? litV : lit, CAP);
+      const flags = zombiePartFlags(model, part.name);
+      const eyes = flags.unlit;
+      const material = eyes ? (part.hasColor ? eyeMatV : eyeMat) : (part.hasColor ? litV : lit);
+      const im = new THREE.InstancedMesh(part.geometry, material, CAP);
       im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       im.frustumCulled = false;
       im.count = 0;
       if (!eyes) im.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(CAP * 3).fill(1), 3);
       rig.scene.add(im);
-      const hat = part.name === 'cap' ? 1 : part.name === 'helmet' ? 2 : 0;
-      this.parts.push({ im, joint, name: part.name, hat, head: part.name === 'head' || eyes || hat > 0, skin: part.name === 'head' });
+      parts.push({ im, joint, name: part.name, ...flags });
     }
+    return { rigJ, parts, count: 0 };
+  }
+
+  // Build the self-drawing families whose models are here (hound, kintsugi).
+  useModels(models) {
+    for (const look of Object.keys(this.factories)) {
+      if (models[look] && !this.drawers[look]) this.drawers[look] = this.factories[look](models[look]);
+    }
+  }
+
+  // The renderer for a family, built from the fallback art if its model never came.
+  drawer(look) {
+    if (!this.drawers[look] && this.factories[look]) this.drawers[look] = this.factories[look](null);
+    return this.drawers[look] || null;
+  }
+
+  get hounds() { return this.drawer('hound'); }
+  get boss() { return this.drawer('kintsugi'); }
+
+  setCalm(on) {
+    this.calm = on;
+    if (this.drawers.hound) this.drawers.hound.calm = on;
   }
 
   // --- Network sync -----------------------------------------------------------------
@@ -232,13 +273,13 @@ export class Zombies {
     const tint = 0.8 + R() * 0.3;
     const hue = R();
     return {
-      id, seed: id, samples: [], state: r[5], cls: r[6], stateT: 0, phase: R() * 6, speed: 0,
+      id, model: zombieModelId(id, r[6]), seed: id, samples: [], state: r[5], cls: r[6], stateT: 0, phase: R() * 6, speed: 0,
       x: r[1] / 100, y: r[2] / 100, z: r[3] / 100, yaw: r[4] / 1000,
       cloth: [tint * (0.92 + hue * 0.12), tint * (0.95 + 0.05 * R()), tint * (0.9 + (1 - hue) * 0.12)],
       skin: [0.85 + R() * 0.15, 0.85 + R() * 0.12, 0.8 + R() * 0.15],
       hat: R() < 0.4 ? 2 : R() < 0.55 ? 1 : 0, // 0 bare, 1 garrison cap, 2 steel helmet
       armDrop: R() * 0.5, limp: R() < 0.35 ? 0.25 + R() * 0.3 : 0, headTilt: (R() - 0.5) * 0.7,
-      nextGroan: r[6] === ZC.HOUND ? 0.4 + R() * 1.5 : 1 + R() * 5, killed: false, headless: false, stepAcc: 0,
+      nextGroan: enemy(r[6]).look === 'hound' ? 0.4 + R() * 1.5 : 1 + R() * 5, killed: false, headless: false, stepAcc: 0,
     };
   }
 
@@ -249,10 +290,12 @@ export class Zombies {
     this.list.delete(id);
     z.killed = true;
     z.deadT = 0;
-    z.kind = z.cls === ZC.HOUND ? 4 : kind; // hounds always burst into flame
+    z.kind = kind;
     z.fallDir = angle;
-    z.headless = kind === 1 && Math.random() < 0.7;
-    z.fallSpeed = kind === 2 ? 2.5 : 1;
+    z.headless = kind === KILL.HEAD && Math.random() < 0.7;
+    z.fallSpeed = kind === KILL.BLAST ? 2.5 : 1;
+    // Electrocuted: stands rigid and fries for a moment before it drops.
+    z.fryT = kind === KILL.SHOCK ? 0.55 + Math.random() * 0.3 : 0;
     this.dying.push(z);
     return z;
   }
@@ -261,7 +304,7 @@ export class Zombies {
   // (a hound still materialising, the boss mid-teleport) are skipped.
   forEachTarget(fn) {
     for (const z of this.list.values()) {
-      if (z.state === ZS.WARP || z.state === ZS.SHATTER || z.state === ZS.REFORM) continue;
+      if (UNTOUCHABLE.has(z.state)) continue;
       fn(z.id, z.x, z.y, z.z, z.state, z.cls, z.yaw);
     }
   }
@@ -272,46 +315,51 @@ export class Zombies {
   update(dt, now, listener) {
     this.time += dt;
     const rt = now - this.interpDelay;
-    let n = 0;
-    let bossShown = false;
-    this.hounds.begin();
+    for (const batch of this.batches.values()) batch.count = 0;
+    const drawn = new Set();
+    for (const d of Object.values(this.drawers)) d.begin?.();
+    const drawSelf = (z) => {
+      const d = this.drawer(enemy(z.cls).look);
+      if (!d) return false;
+      d.draw(z, dt, this.time);
+      drawn.add(d);
+      return true;
+    };
     for (const z of this.list.values()) {
       this.interpolate(z, rt, dt);
       z.stateT += dt;
-      if (z.cls === ZC.HOUND) {
-        this.hounds.draw(z, dt, this.time);
-      } else if (z.cls === ZC.KINTSUGI) {
-        z.stage = this.bossInfo.stage; z.hpFrac = this.bossInfo.hpFrac;
-        this.boss.draw(z, dt, this.time);
-        bossShown = true;
-      } else {
-        this.pose(z, dt);
-        this.write(z, n++);
+      if (enemy(z.cls).boss) { z.stage = this.bossInfo.stage; z.hpFrac = this.bossInfo.hpFrac; }
+      if (!drawSelf(z)) {
+        this.drawZombie(z, dt);
       }
       this.voice(z, dt, listener);
     }
     for (let i = this.dying.length - 1; i >= 0; i--) {
       const z = this.dying[i];
       z.deadT += dt;
-      const life = z.cls === ZC.HOUND ? 1.2 : z.cls === ZC.KINTSUGI ? 5.5 : 4.5;
-      if (z.deadT > life) { this.dying.splice(i, 1); continue; }
-      if (z.cls === ZC.HOUND) {
-        this.hounds.draw(z, dt, this.time);
-      } else if (z.cls === ZC.KINTSUGI) {
-        this.boss.draw(z, dt, this.time);
-        bossShown = true;
-      } else {
-        this.poseDead(z, dt);
-        if (n < CAP) this.write(z, n++);
+      if (z.deadT > enemy(z.cls).corpseLife) { this.dying.splice(i, 1); continue; }
+      if (z.deadT < z.fryT + 0.4) this.fx.shockCrawl(z.x, z.y, z.z, enemy(z.cls).mid * 2);
+      if (!drawSelf(z)) {
+        this.drawZombie(z, dt);
       }
     }
-    this.hounds.end();
-    if (!bossShown) this.boss.hide();
-    for (const p of this.parts) {
-      p.im.count = n;
+    for (const d of Object.values(this.drawers)) {
+      d.end?.();
+      if (!drawn.has(d)) d.hide?.();
+    }
+    for (const batch of this.batches.values()) for (const p of batch.parts) {
+      p.im.count = batch.count;
       p.im.instanceMatrix.needsUpdate = true;
       if (p.im.instanceColor) p.im.instanceColor.needsUpdate = true;
     }
+  }
+
+  drawZombie(z, dt) {
+    const batch = this.batches.get(z.model) || this.batches.get('ghoul');
+    if (batch.count >= CAP) return;
+    if (z.killed) this.poseDead(z, dt, batch.rigJ);
+    else this.pose(z, dt, batch.rigJ);
+    this.write(z, batch.count++, batch);
   }
 
   interpolate(z, rt, dt) {
@@ -335,8 +383,7 @@ export class Zombies {
     z.speed += (Math.min(6, v) - z.speed) * Math.min(1, dt * 8);
   }
 
-  pose(z, dt) {
-    const J = this.rigJ;
+  pose(z, dt, J) {
     for (const k of ['body', 'hips', 'spine', 'neck', 'shL', 'shR', 'elL', 'elR', 'hipL', 'hipR', 'knL', 'knR']) J[k].rotation.set(0, 0, 0);
     J.body.position.set(0, 0, 0);
     const t = this.time + z.seed;
@@ -414,9 +461,9 @@ export class Zombies {
     }
   }
 
-  poseDead(z) {
-    const J = this.rigJ;
-    const u = Math.min(1, z.deadT * 2.2 * z.fallSpeed);
+  poseDead(z, dt, J) {
+    if (z.deadT < z.fryT) return this.poseFry(z, J);
+    const u = Math.min(1, (z.deadT - z.fryT) * 2.2 * z.fallSpeed);
     const ease = u * u;
     J.body.rotation.set(0, 0, 0);
     J.body.position.set(0, 0, 0);
@@ -431,8 +478,24 @@ export class Zombies {
     z.sink = Math.max(0, z.deadT - 3.2) * 0.35;
   }
 
-  write(z, i) {
-    const J = this.rigJ;
+  // Rigid and shaking, arms thrown out, head back.
+  poseFry(z, J) {
+    const j = () => (Math.random() - 0.5) * 0.35;
+    J.body.rotation.set(0, 0, 0);
+    J.body.position.set(0, 0.02 + Math.random() * 0.02, 0);
+    J.hips.rotation.set(j() * 0.3, 0, 0);
+    J.spine.rotation.set(-0.25 + j(), j(), j() * 0.5);
+    J.neck.rotation.set(-0.6 + j(), j(), j());
+    J.shL.rotation.set(-1.2 + j(), 0, 0.9 + j()); J.shR.rotation.set(-1.1 + j(), 0, -0.9 + j());
+    J.elL.rotation.set(-0.7 + j(), 0, 0); J.elR.rotation.set(-0.8 + j(), 0, 0);
+    J.hipL.rotation.set(j() * 0.4, 0, 0.1); J.hipR.rotation.set(j() * 0.4, 0, -0.1);
+    J.knL.rotation.set(0.1 + Math.abs(j()), 0, 0); J.knR.rotation.set(0.1 + Math.abs(j()), 0, 0);
+    z.fall = 0;
+    z.sink = 0;
+  }
+
+  write(z, i, batch) {
+    const J = batch.rigJ;
     this._qy.setFromAxisAngle(this._up, z.yaw);
     if (z.killed) {
       // Fall away from the shot: rotate around a horizontal axis.
@@ -447,7 +510,7 @@ export class Zombies {
     }
     J.root.updateMatrixWorld(true);
     const c = this._c;
-    for (const p of this.parts) {
+    for (const p of batch.parts) {
       if ((p.head && z.headless) || (p.hat && p.hat !== z.hat)) {
         p.im.setMatrixAt(i, this._m.makeScale(0, 0, 0));
       } else {
@@ -456,24 +519,28 @@ export class Zombies {
       if (p.im.instanceColor) {
         const col = p.skin ? z.skin : z.cloth;
         c.setRGB(col[0], col[1], col[2]);
-        if (z.killed && z.kind === 2) c.multiplyScalar(0.35);
+        if (z.killed && z.kind === KILL.BLAST) c.multiplyScalar(0.35);
+        else if (z.killed && z.kind === KILL.SHOCK) c.multiplyScalar(Math.max(0.28, 1 - z.deadT * 1.4));
         p.im.setColorAt(i, c);
       }
     }
   }
 
-  // Voices stay attached to the zombie that made them.
+  // Voices stay attached to the zombie that made them. `quiet` (game over) stops new ones.
   voice(z, dt, listener) {
-    if (z.cls === ZC.HOUND) return this.houndVoice(z, dt, listener);
-    if (z.cls === ZC.KINTSUGI) return this.bossVoice(z, dt, listener);
+    if (this.quiet) return;
+    const look = enemy(z.cls).look;
+    if (look === 'hound') return this.houndVoice(z, dt, listener);
+    if (look === 'kintsugi') return this.bossVoice(z, dt, listener);
     z.voice?.move(z.x, z.y + 1.6, z.z);
     z.nextGroan -= dt;
     if (z.nextGroan > 0) return;
     const d = listener ? Math.hypot(listener.x - z.x, listener.z - z.z) : 0;
     z.nextGroan = 2.5 + Math.random() * 6 + d * 0.08;
     const pos = { x: z.x, y: z.y + 1.6, z: z.z };
-    if (z.cls === 2 && z.state === ZS.CHASE && Math.random() < 0.5) z.voice = this.audio.zombieScream(pos, z.seed);
-    else z.voice = this.audio.zombieGroan(pos, z.seed);
+    const scream = z.cls === ZC.RUNNER && z.state === ZS.CHASE && Math.random() < 0.5;
+    z.voice = scream ? this.audio.zombieScream(pos, z.seed) : this.audio.zombieGroan(pos, z.seed);
+    this.onSound?.(scream ? 'scream' : 'groan', z);
   }
 
   // Claws on the floor while running, growls and snarl-barks between.
@@ -487,7 +554,9 @@ export class Zombies {
     z.nextGroan -= dt;
     if (z.nextGroan > 0) return;
     z.nextGroan = 1.2 + Math.random() * 2.2;
-    z.voice = Math.random() < 0.55 ? this.audio.houndGrowl?.(pos, z.seed) : this.audio.houndBark?.(pos, z.seed);
+    const growl = Math.random() < 0.55;
+    z.voice = growl ? this.audio.houndGrowl?.(pos, z.seed) : this.audio.houndBark?.(pos, z.seed);
+    this.onSound?.(growl ? 'growl' : 'bark', z);
   }
 
   // Porcelain heels on concrete.
@@ -500,9 +569,12 @@ export class Zombies {
   clear() {
     this.list.clear();
     this.dying.length = 0;
-    for (const p of this.parts) p.im.count = 0;
-    this.hounds.clear();
-    this.boss.hide();
+    for (const batch of this.batches.values()) {
+      batch.count = 0;
+      for (const p of batch.parts) p.im.count = 0;
+    }
+    this.drawers.hound?.clear();
+    this.drawers.kintsugi?.hide();
   }
 }
 

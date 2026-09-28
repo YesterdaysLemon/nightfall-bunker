@@ -17,14 +17,17 @@
 // draw() advances d.phase (gait) and caches a little scratch on d (d._hk).
 
 import * as THREE from 'three';
-import { ZS as ZSP } from '../../shared/protocol.js';
+import { ZS, ZC } from '../../shared/protocol.js';
 import { buildJoints } from './models.js';
+import { HOUND_SCALE, enemy } from '../../shared/enemies.js';
+import { mulberry32 as rng } from '../../shared/rng.js';
 
-const ZS = { CHASE: ZSP.CHASE ?? 4, ATTACK: ZSP.ATTACK ?? 5, WARP: ZSP.WARP ?? 6 };
 const CAP = 32;
 const TAU = Math.PI * 2;
 const FLESH = 0, BONE = 1;
-const WARP_T = 0.9, ATTACK_T = 0.35, DEATH_T = 0.72;
+// Warp-in length comes from the rules; the bite animation runs a little past the
+// wind-up so the jaws snap shut as it lands; the burning death lasts DEATH_T.
+const WARP_T = enemy(ZC.HOUND).warpTime, ATTACK_T = enemy(ZC.HOUND).melee.windup + 0.05, DEATH_T = 0.72;
 const JOINTS = ['body', 'spine', 'fore', 'hind', 'neck', 'head', 'jaw', 'shL', 'shR', 'elL', 'elR',
   'hipL', 'hipR', 'stL', 'stR', 'hkL', 'hkR', 'tail'];
 const GLOW_GAIN = 1.7; // emissive intensity of the model's glow page (the per-hound glow multiplies it)
@@ -40,16 +43,6 @@ const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a
 const lerp = (a, b, t) => a + (b - a) * t;
 function hash1(n) { const h = Math.sin(n * 127.1 + 311.7) * 43758.5453; return h - Math.floor(h); }
 function hash3(x, y, z) { const h = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453; return h - Math.floor(h); }
-function rng(seed) {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 // --- Geometry -----------------------------------------------------------------------
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
@@ -479,7 +472,7 @@ export class Hounds {
     if (!k) {
       const R = rng((d.seed ?? d.id ?? 1) * 7919 + 13);
       k = d._hk = {
-        size: 0.94 + R() * 0.12, tint: 0.85 + R() * 0.3, ember: [1, 0.78 + R() * 0.3, 0.7 + R() * 0.45],
+        size: (0.94 + R() * 0.12) * HOUND_SCALE, tint: 0.85 + R() * 0.3, ember: [1, 0.78 + R() * 0.3, 0.7 + R() * 0.45],
         off: R() * 50, lean: (R() - 0.5) * 0.12,
       };
       if (!Number.isFinite(d.phase)) d.phase = R() * TAU;
@@ -544,7 +537,7 @@ export class Hounds {
       // Materialise out of nothing: grow, with a hard flicker while unstable.
       let s = 0.04 + 0.96 * smooth(0, 0.62, u);
       const fl = hash1(Math.floor(time * 26) + (d.seed || 0) * 13.1);
-      if (u < 0.8 && fl < 0.45 * (1 - u / 0.8)) s *= 0.35 + fl;
+      if (!this.calm && u < 0.8 && fl < 0.45 * (1 - u / 0.8)) s *= 0.35 + fl;
       out.scale *= s;
       out.tint *= 0.45 + 0.55 * u;
       out.glow = 1.9 - 0.9 * u;

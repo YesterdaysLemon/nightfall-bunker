@@ -174,6 +174,9 @@ import { houndCount, houndHealth, bossHealth } from '../src/shared/sim.js';
 import { EGG } from '../src/shared/map.js';
 import { ZC } from '../src/shared/protocol.js';
 import { houndHitTest, enemyHitTest } from '../src/shared/world.js';
+import { HOUND_SCALE } from '../src/shared/enemies.js';
+import { spawnBoss } from '../src/shared/encounters/kintsugi.js';
+import { readFileSync } from 'node:fs';
 
 function runUntil(sim, pred, maxTicks = 4000, perTick = () => {}) {
   const seen = [];
@@ -185,14 +188,48 @@ function runUntil(sim, pred, maxTicks = 4000, perTick = () => {}) {
   return seen;
 }
 
-test('hound hitboxes follow the hound yaw', () => {
-  // Facing +x (yaw = pi/2): the head is ~0.6 m toward +x at 0.62 m up.
-  const head = houndHitTest(0.6, 0.62, 5, 0, 0, -1, 0, 0, 0, Math.PI / 2, 50);
+test('hound hitboxes follow the hound yaw, its scale and its whole body', () => {
+  const S = HOUND_SCALE;
+  // Facing +x (yaw = pi/2): the skull is 0.6 model-metres ahead, 0.84 up.
+  const head = houndHitTest(0.6 * S, 0.84 * S, 5, 0, 0, -1, 0, 0, 0, Math.PI / 2, 50);
   assert.equal(head.part, 0);
-  const body = houndHitTest(-0.3, 0.5, 5, 0, 0, -1, 0, 0, 0, Math.PI / 2, 50);
+  const body = houndHitTest(-0.3 * S, 0.62 * S, 5, 0, 0, -1, 0, 0, 0, Math.PI / 2, 50);
   assert.equal(body.part, 1);
-  assert.equal(houndHitTest(0, 1.6, 5, 0, 0, -1, 0, 0, 0, 0, 50), null, 'a hound is not head-high');
+  const legs = houndHitTest(0.21 * S, 0.2 * S, 5, 0, 0, -1, 0, 0, 0, Math.PI / 2, 50);
+  assert.equal(legs.part, 2, 'the legs count (as limbs)');
+  assert.equal(houndHitTest(0, 1.75, 5, 0, 0, -1, 0, 0, 0, 0, 50), null, 'a hound is not head-high');
   assert.ok(enemyHitTest(ZC.WALKER, 0, 1.63, 5, 0, 0, -1, 0, 0, 0, 0, 50), 'zombies keep humanoid boxes');
+  // A shot a hand's width off its flank still connects.
+  assert.ok(houndHitTest(0.2 * S + 0.05, 0.6 * S, 5, 0, 0, -1, 0, 0, 0, 0, 50), 'forgiving at the flank');
+});
+
+test('every part of the exported hound, standing as drawn, is inside its hit volumes', () => {
+  const model = JSON.parse(readFileSync(new URL('../public/models/hound.json', import.meta.url), 'utf8'));
+  // The game's standing pose (render/hounds.js rest()): rotations about X only.
+  const RX = { neck: -0.55, head: 0.55, jaw: 0.04, shL: 0.12, shR: 0.12, elL: -0.12, elR: -0.12, hipL: -0.35, hipR: -0.35, stL: 0.9, stR: 0.9, hkL: -0.55, hkR: -0.55, tail: -0.15 };
+  const frame = {};
+  const get = (n) => {
+    if (frame[n]) return frame[n];
+    const j = model.joints[n];
+    const parent = j.parent ? get(j.parent) : { o: [0, 0, 0], a: 0 };
+    const [x, y, z] = j.pos, c = Math.cos(parent.a), s = Math.sin(parent.a);
+    return (frame[n] = { o: [parent.o[0] + x, parent.o[1] + y * c - z * s, parent.o[2] + y * s + z * c], a: parent.a + (RX[n] || 0) });
+  };
+  const S = HOUND_SCALE;
+  let inside = 0, total = 0;
+  for (const p of model.parts) {
+    if (p.name === 'tail') continue; // a thin whip, not a target
+    const f = get(p.joint), c = Math.cos(f.a), s = Math.sin(f.a);
+    for (let i = 0; i < p.pos.length; i += 3) {
+      const [x, y, z] = [p.pos[i], p.pos[i + 1], p.pos[i + 2]];
+      const w = [(f.o[0] + x) * S, (f.o[1] + y * c - z * s) * S, (f.o[2] + y * s + z * c) * S];
+      // Is w inside? Cast a ray through it along x from outside and see where it enters.
+      const h = houndHitTest(w[0] + 3, w[1], w[2], -1, 0, 0, 0, 0, 0, 0, 50);
+      if (h && h.t <= 3 + 1e-6) inside++;
+      total++;
+    }
+  }
+  assert.ok(inside / total >= 0.97, `${inside}/${total} hound vertices inside its hit volumes`);
 });
 
 test('hound rounds: scheduled, spawn inside near players, last hound drops max ammo', () => {
@@ -277,7 +314,7 @@ test('boss: slow when watched, fast when not, immune while shattered, drops gold
   const p = sim.addPlayer('p', 'P');
   sim.openDoor('helpDoor');
   sim.phase = 'round'; sim.toSpawn = 0;
-  sim.spawnBoss();
+  spawnBoss(sim);
   const k = sim.boss;
   k.state = ZS.CHASE;
   // Stand in the start room doorway looking straight at her, then turn around.

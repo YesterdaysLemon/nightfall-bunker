@@ -1,21 +1,26 @@
 // Collision world: axis-aligned boxes in a coarse spatial hash. Used by the
 // client for the local player and by the simulation for grenades,
-// projectiles and zombie line-of-sight.
+// projectiles and enemy line-of-sight.
 
-import { buildStaticBoxes, windowBlockers, DOORS } from './map.js';
+import { BUNKER } from './map.js';
+import { enemy } from './enemies.js';
+import { ZC } from './protocol.js';
 
-const CELL = 2;
-const GX0 = -24, GZ0 = -14, GW = 22, GH = 14; // hash covers x [-24, 20], z [-14, 14]
+const CELL = 2;   // spatial hash cell (m); the hash covers map.worldBounds
 
 export const PLAYER_RADIUS = 0.32;
 export const STEP_HEIGHT = 0.45;
 export const GRAVITY = 19;
 
 export class World {
-  constructor() {
-    this.static = buildStaticBoxes();
-    this.windows = windowBlockers();
-    this.doors = DOORS.map((d) => ({ b: [...d.box], tag: d.kind, door: d.id }));
+  // map: a map object from map.js (the bunker by default).
+  constructor(map = BUNKER) {
+    this.map = map;
+    const [x0, z0, x1, z1] = map.worldBounds;
+    this.grid = { x0, z0, w: Math.ceil((x1 - x0) / CELL), h: Math.ceil((z1 - z0) / CELL) };
+    this.static = map.buildStaticBoxes();
+    this.windows = map.windowBlockers();
+    this.doors = map.DOORS.map((d) => ({ b: [...d.box], tag: d.kind, door: d.id }));
     this.openDoors = new Set();
     this.version = 0;
     this.rebuild();
@@ -33,8 +38,8 @@ export class World {
     this.solid = pack([...this.static, ...this.windows, ...doors]);
     // Bullets and grenades pass through window openings.
     this.ray = pack([...this.static, ...doors]);
-    this.solidHash = hash(this.solid);
-    this.rayHash = hash(this.ray);
+    this.solidHash = hash(this.solid, this.grid);
+    this.rayHash = hash(this.ray, this.grid);
     this.version++;
   }
 
@@ -182,39 +187,33 @@ export class World {
 }
 
 // --- Hitboxes ----------------------------------------------------------------
-// Zombie hit volumes relative to its feet. `lift` shifts them (rising out of
-// the ground is negative). Parts: 0 head, 1 torso, 2 legs.
-export function zombieHitTest(ox, oy, oz, dx, dy, dz, zx, zy, zz, maxDist) {
-  // Head sphere.
+// Every enemy's hit volumes are data in enemies.js ([part, 'sphere'|'capsule', ...]
+// in model metres, facing +Z); this one test reads them, turned by the enemy's
+// yaw and scaled by its size. Parts: 0 head, 1 body, 2 limbs.
+export function volumeHitTest(volumes, scale, ox, oy, oz, dx, dy, dz, x, y, z, yaw, maxDist) {
+  const fx = Math.sin(yaw) * scale, fz = Math.cos(yaw) * scale;
   let best = maxDist, part = -1;
-  let t = raySphere(ox, oy, oz, dx, dy, dz, zx, zy + 1.63, zz, 0.17);
-  if (t >= 0 && t < best) { best = t; part = 0; }
-  t = rayCapsuleY(ox, oy, oz, dx, dy, dz, zx, zz, zy + 0.95, zy + 1.35, 0.24);
-  if (t >= 0 && t < best) { best = t; part = 1; }
-  t = rayCapsuleY(ox, oy, oz, dx, dy, dz, zx, zz, zy + 0.08, zy + 0.95, 0.2);
-  if (t >= 0 && t < best) { best = t; part = 2; }
-  return part < 0 ? null : { t: best, part };
-}
-
-// Hound hit volumes: a skull sphere out front and three spheres along the body,
-// all following the hound's yaw (facing +Z rotated by yaw). Parts: 0 head, 1 body.
-export function houndHitTest(ox, oy, oz, dx, dy, dz, hx, hy, hz, yaw, maxDist) {
-  const fx = Math.sin(yaw), fz = Math.cos(yaw);
-  let best = maxDist, part = -1;
-  let t = raySphere(ox, oy, oz, dx, dy, dz, hx + fx * 0.6, hy + 0.62, hz + fz * 0.6, 0.16);
-  if (t >= 0 && t < best) { best = t; part = 0; }
-  for (const [f, y, r] of [[0.28, 0.55, 0.22], [-0.05, 0.52, 0.21], [-0.38, 0.5, 0.19]]) {
-    t = raySphere(ox, oy, oz, dx, dy, dz, hx + fx * f, hy + y, hz + fz * f, r);
-    if (t >= 0 && t < best) { best = t; part = 1; }
+  for (const v of volumes) {
+    const f = v[2];
+    const t = v[1] === 'sphere'
+      ? raySphere(ox, oy, oz, dx, dy, dz, x + fx * f, y + v[3] * scale, z + fz * f, v[4] * scale)
+      : rayCapsuleY(ox, oy, oz, dx, dy, dz, x + fx * f, z + fz * f, y + v[3] * scale, y + v[4] * scale, v[5] * scale);
+    if (t >= 0 && t < best) { best = t; part = v[0]; }
   }
   return part < 0 ? null : { t: best, part };
 }
 
-// Any enemy by class: hounds are quadrupeds, everything else is humanoid.
 export function enemyHitTest(cls, ox, oy, oz, dx, dy, dz, x, y, z, yaw, maxDist) {
-  return cls === 3
-    ? houndHitTest(ox, oy, oz, dx, dy, dz, x, y, z, yaw, maxDist)
-    : zombieHitTest(ox, oy, oz, dx, dy, dz, x, y, z, maxDist);
+  const e = enemy(cls);
+  return volumeHitTest(e.hit, e.scale, ox, oy, oz, dx, dy, dz, x, y, z, yaw, maxDist);
+}
+
+// The two shapes by name (tests and tools).
+export function zombieHitTest(ox, oy, oz, dx, dy, dz, zx, zy, zz, maxDist) {
+  return enemyHitTest(ZC.WALKER, ox, oy, oz, dx, dy, dz, zx, zy, zz, 0, maxDist);
+}
+export function houndHitTest(ox, oy, oz, dx, dy, dz, hx, hy, hz, yaw, maxDist) {
+  return enemyHitTest(ZC.HOUND, ox, oy, oz, dx, dy, dz, hx, hy, hz, yaw, maxDist);
 }
 
 // Exported for small props (the easter-egg teacups).
@@ -258,7 +257,8 @@ function pack(list) {
   return a;
 }
 
-function hash(B) {
+function hash(B, g) {
+  const GX0 = g.x0, GZ0 = g.z0, GW = g.w, GH = g.h;
   const cells = Array.from({ length: GW * GH }, () => []);
   const n = B.length / 6;
   for (let i = 0; i < n; i++) {
@@ -267,7 +267,7 @@ function hash(B) {
     const r0 = clampI(Math.floor((B[o + 2] - GZ0) / CELL), GH), r1 = clampI(Math.floor((B[o + 5] - GZ0) / CELL), GH);
     for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) cells[r * GW + c].push(i);
   }
-  return { cells, n, seen: new Uint32Array(n), stamp: 1, out: [] };
+  return { cells, n, seen: new Uint32Array(n), stamp: 1, out: [], g };
 }
 
 function clampI(v, n) { return v < 0 ? 0 : v >= n ? n - 1 : v; }
@@ -276,6 +276,7 @@ function clampI(v, n) { return v < 0 ? 0 : v >= n ? n - 1 : v; }
 // reused between calls: consume it before querying again.
 function query(h, x0, z0, x1, z1) {
   const out = h.out; out.length = 0;
+  const GX0 = h.g.x0, GZ0 = h.g.z0, GW = h.g.w, GH = h.g.h;
   if (x1 < GX0 || z1 < GZ0 || x0 > GX0 + GW * CELL || z0 > GZ0 + GH * CELL) return out;
   const stamp = ++h.stamp;
   if (stamp > 0xfffffff0) { h.seen.fill(0); h.stamp = 1; }

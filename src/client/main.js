@@ -3,34 +3,33 @@
 import { Game } from './game.js';
 import { LocalConnection, WsConnection, lobbyApi, sessionToken } from './net.js';
 import { PROTOCOL, REGIONS, MAX_PLAYERS, PLAYER_COLORS } from '../shared/protocol.js';
+import { WEAPONS, reloadStyle } from '../shared/weapons.js';
 import { escapeHtml } from './hud.js';
 import { TouchControls } from './touch.js';
 import { loadModels } from './render/models.js';
+import { ZOMBIE_MODELS } from './render/zombie-models.js';
+import MODEL_VERSIONS from 'virtual:model-versions';
+import { loadSettings, saveSettings } from './settings.js';
+import { SettingsSheet, applyPage } from './settings-ui.js';
+import { TEXT } from './text.js';
 
 const $ = (id) => document.getElementById(id);
 const screens = ['screenMain', 'screenLobby', 'screenOver'];
 
-const DEFAULTS = {
-  name: '', sensitivity: 1, fov: 80, volume: 0.8, quality: 'medium', invert: false, hrtf: true, retro: true,
-  touchSens: 1, touchAutoFire: true, touchAssist: true, gyro: false,
-};
-
-function loadSettings() {
-  try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem('nb_settings') || '{}') }; } catch { return { ...DEFAULTS }; }
-}
-function saveSettings(s) {
-  try { localStorage.setItem('nb_settings', JSON.stringify(s)); } catch { /* private mode */ }
-}
-
 const params = new URLSearchParams(location.search);
 const settings = loadSettings();
+applyPage(settings);
 // ?mute keeps a tab silent (used by automated checks); M toggles in game.
 if (params.has('mute')) settings.muted = true;
 if (!settings.name) settings.name = `Survivor${Math.floor(100 + Math.random() * 900)}`;
 const token = sessionToken();
 
-// Painted low-poly characters from the art pipeline (missing ones fall back to procedural art).
-const models = await loadModels(['ghoul', 'hound', 'kintsugi', 'survivor']);
+// Painted low-poly characters from the art pipeline (missing ones fall back to
+// procedural art). The menu waits only for the horde. Hounds (round 5 on), the
+// Kintsugi set (the easter egg) and other players' avatar load alongside and are
+// swapped in when they arrive (Game.useModels).
+const later = loadModels(['hound', 'kintsugi', 'survivor'], '/models/', MODEL_VERSIONS);
+const models = await loadModels(Object.keys(ZOMBIE_MODELS), '/models/', MODEL_VERSIONS);
 
 let game;
 try {
@@ -40,8 +39,15 @@ try {
   $('loadingText').textContent = 'WebGL is not available in this browser.';
   throw err;
 }
+performance.mark('nb-game-built');
+await game.ready;   // shaders compiled: the first frame won't stall
+performance.mark('nb-menu');
 $('loading').classList.add('done');
-if (import.meta.env.DEV || params.has('test')) window.__game = game;
+// The late models swap in after the menu is up, so their shaders don't hold it back.
+later.then((m) => setTimeout(() => game.useModels(m), 0));
+const devBuild = import.meta.env.DEV || params.has('test');
+if (devBuild) window.__game = game;
+if (devBuild) window.__weapons = { WEAPONS, reloadStyle };
 // Automated runs must never request pointer lock: headless Chromium on Windows
 // implements it by clipping the real system cursor to its invisible window.
 if (params.has('test')) game.input.fallback = true;
@@ -49,7 +55,10 @@ if (params.has('test')) game.input.fallback = true;
 // --- Touch ----------------------------------------------------------------------------
 const touch = new TouchControls(game.input, { settings, onPause: () => game.input.setLocked(false) });
 game.touch = touch;
-touch.onEditDone = () => { $('menu').hidden = false; };
+touch.onEditDone = () => {
+  if (game.mode === 'play') $('pause').hidden = false;
+  else $('menu').hidden = false;
+};
 function enableTouch() {
   if (game.input.touchMode) return;
   game.input.touchMode = true;
@@ -64,43 +73,29 @@ if (coarse || params.has('touch')) {
 }
 addEventListener('pointerdown', (e) => { if (e.pointerType === 'touch') enableTouch(); }, { capture: true, passive: true });
 
-// --- Settings UI ----------------------------------------------------------------------
+// --- Settings ---------------------------------------------------------------------------
 const nameInput = $('nameInput');
 nameInput.value = settings.name;
-$('setSens').value = settings.sensitivity;
-$('setFov').value = settings.fov;
-$('setVol').value = settings.volume;
-$('setQuality').value = settings.quality;
-$('setInvert').checked = settings.invert;
-$('setHrtf').checked = settings.hrtf;
-$('setRetro').checked = settings.retro !== false;
-$('setTouchSens').value = settings.touchSens;
-$('setAutoFire').checked = settings.touchAutoFire;
-$('setAssist').checked = settings.touchAssist;
-$('setGyro').checked = false;
+settings.gyro = false; // the motion permission is asked for again each visit
 const syncSettings = () => {
   settings.name = nameInput.value.trim().slice(0, 16) || settings.name;
-  settings.sensitivity = Number($('setSens').value);
-  settings.fov = Number($('setFov').value);
-  settings.volume = Number($('setVol').value);
-  settings.quality = $('setQuality').value;
-  settings.invert = $('setInvert').checked;
-  settings.hrtf = $('setHrtf').checked;
-  settings.retro = $('setRetro').checked;
-  settings.touchSens = Number($('setTouchSens').value);
-  settings.touchAutoFire = $('setAutoFire').checked;
-  settings.touchAssist = $('setAssist').checked;
   saveSettings(settings);
-  game.applySettings(settings);
 };
-$('setGyro').addEventListener('change', async () => {
-  const want = $('setGyro').checked;
-  const ok = await touch.setGyro(want);
-  if (want && !ok) { $('setGyro').checked = false; $('mainError').textContent = 'Gyro aiming is not available on this device.'; }
-  settings.gyro = $('setGyro').checked;
+nameInput.addEventListener('change', syncSettings);
+const sheet = new SettingsSheet($('settings'), settings, () => { game.applySettings(settings); applyPage(settings); }, {
+  setGyro: (on) => touch.setGyro(on),
+  isTouch: () => game.input.touchMode,
+  editTouch: () => {
+    $('menu').hidden = true;
+    $('pause').hidden = true;
+    touch.edit(true);
+  },
 });
-$('btnEditTouch').addEventListener('click', () => { $('menu').hidden = true; touch.edit(true); });
-for (const id of ['nameInput', 'setSens', 'setFov', 'setVol', 'setQuality', 'setInvert', 'setHrtf', 'setRetro', 'setTouchSens', 'setAutoFire', 'setAssist']) $(id).addEventListener('change', syncSettings);
+$('btnSettings').addEventListener('click', () => sheet.show('video'));
+$('btnControls').addEventListener('click', () => sheet.show(game.input.touchMode ? 'touch' : 'controls'));
+// From the pause menu the sheet replaces the pause box, which comes back when it closes.
+$('btnPauseSettings').addEventListener('click', () => { $('pause').hidden = true; sheet.show(); });
+$('settings').addEventListener('close', () => { if (game.mode === 'play' && !game.input.locked) $('pause').hidden = false; });
 
 function show(screen) {
   $('menu').hidden = !screen;
@@ -191,11 +186,11 @@ game.input.onNeedClick = () => {
   $('pauseSub').textContent = 'Click to play.';
 };
 addEventListener('keydown', (e) => {
-  if (e.code !== 'KeyM' || game.input.typing || document.activeElement?.tagName === 'INPUT') return;
+  if (game.input.canon(e.code) !== 'KeyM' || game.input.typing || sheet.open || document.activeElement?.tagName === 'INPUT') return;
   game.setMuted(!game.muted);
   settings.muted = game.muted;
   if (!params.has('mute')) saveSettings(settings);
-  if (game.mode === 'play') game.hud.center(game.muted ? 'Sound off' : 'Sound on', 'Press M to toggle', 1200);
+  if (game.mode === 'play') game.hud.center(...TEXT.soundToggle(!game.muted, game.keyName('mute')), 1200);
 });
 
 game.input.onLockChange = (locked) => {
@@ -232,7 +227,18 @@ $('btnSolo').onclick = () => {
   $('mainError').textContent = '';
   session = { kind: 'solo' };
   game.start(new LocalConnection(), { name: settings.name, token, local: true });
+  const give = params.get('give');
+  if (devBuild && WEAPONS[give]) devGive(give);
 };
+
+// Dev builds and ?test: ?give=<gun id> (e.g. leyden) puts that gun in your hands
+// when a solo game starts.
+function devGive(id, tries = 25) {
+  const sim = game.conn?.room?.sim, p = sim?.players.get(game.me);
+  if (!p) { if (tries > 0) setTimeout(() => devGive(id, tries - 1), 200); return; }
+  sim.giveWeapon(p, id);
+  sim.emit(['give', p.id, id, p.weapons.join(',')]);
+}
 
 // --- Multiplayer ----------------------------------------------------------------------------
 let regions = null;
@@ -393,8 +399,8 @@ if (/^[A-Z]{4}$/.test(hash)) {
 // Chat (multiplayer).
 const chatInput = $('chatInput');
 addEventListener('keydown', (e) => {
-  if (game.mode !== 'play' || session?.kind !== 'mp') return;
-  if (e.key === 'Enter' && chatInput.hidden) {
+  if (game.mode !== 'play' || session?.kind !== 'mp' || sheet.open) return;
+  if (game.input.canon(e.code) === 'Enter' && chatInput.hidden && !game.input.typing) {
     e.preventDefault();
     chatInput.hidden = false;
     game.input.typing = true;

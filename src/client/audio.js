@@ -1,7 +1,9 @@
-// Procedural Web Audio engine: every sound is synthesized at runtime (no samples, no imports).
+// Procedural Web Audio engine: every sound is synthesized at runtime (no samples).
 // Graph: voices -> [air/occlusion lowpass -> makeup -> HRTF panner] -> bus (sfx | music | dry)
 //   -> master -> limiter -> out. Positional voices also send a steady, un-attenuated feed to one
 // shared "bunker" convolver, so the direct/reverb ratio falls with distance like a real room.
+
+import { mulberry32 } from '../shared/rng.js';
 
 const EPS = 1e-4;
 const P_LOW = 0, P_MED = 1, P_HIGH = 2, P_CRIT = 3;
@@ -68,15 +70,8 @@ function seedInt(s) {
   return h | 0;
 }
 
-function mulberry(seed) {
-  let a = (seed ^ 0x9e3779b9) | 0;
-  return () => {
-    a = (a + 0x6d2b79f5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+// Audio's own sequences: the shared generator with the seed mixed first.
+const mulberry = (seed) => mulberry32(seed ^ 0x9e3779b9);
 
 function validPos(p) {
   if (!p || typeof p !== 'object' || !Number.isFinite(p.x) || !Number.isFinite(p.z)) return null;
@@ -101,6 +96,7 @@ const MUSICBOX = [[1, 1, 1], [4.2, 0.2, 0.22]];
 
 // crack: [bandpass Hz, Q, decay, peak]; snap: [decay, peak]; thump: [f0, f1, decay, peak];
 // tail / body: [noise, lowpass Hz, decay, peak]
+// Gun sound recipes, keyed by WEAPONS[id].sound ('rocket' and 'arc' are their own voices).
 const GUNS = {
   pistol: { vol: 0.7, crack: [2400, 0.9, 0.07, 1.0], snap: [0.018, 0.5], thump: [170, 55, 0.09, 0.9], tail: ['pink', 1400, 0.3, 0.22] },
   rifle: { vol: 0.8, crack: [1900, 0.7, 0.1, 1.1], snap: [0.025, 0.6], thump: [120, 42, 0.15, 1.1], tail: ['pink', 1000, 0.55, 0.3], drive: 'soft' },
@@ -109,6 +105,8 @@ const GUNS = {
   shotgun: { vol: 0.85, crack: [1100, 0.5, 0.17, 1.3], snap: [0.03, 0.7], thump: [85, 32, 0.26, 1.4], tail: ['brown', 800, 1.0, 0.55], body: ['pink', 2400, 0.12, 0.9], drive: 'hard' },
   lmg: { vol: 0.65, crack: [1300, 0.8, 0.065, 0.95], thump: [95, 40, 0.1, 1.1], tail: ['brown', 900, 0.22, 0.2] },
 };
+
+export const GUN_SOUNDS = [...Object.keys(GUNS), 'rocket', 'arc', 'tesla'];
 
 // Radio waltz melody: [beat, length in beats, semitones from D5]. 3/4, 10 bars.
 const WALTZ = [
@@ -263,6 +261,7 @@ export class AudioEngine {
   gunshot(kind = 'pistol', pos) {
     if (kind === 'rocket') return this._rocket(pos);
     if (kind === 'arc') return this._arc(pos);
+    if (kind === 'tesla') return this._tesla(pos);
     const G = GUNS[kind] || GUNS.pistol, P = validPos(pos);
     const v = this._voice(P ? P_MED : P_HIGH, P); if (!v) return;
     const t = this._now(), r = rand(0.94, 1.06);
@@ -315,6 +314,54 @@ export class AudioEngine {
     this._tone(v, v.out, t, { f: 240, f2: 55, d: 0.14, peak: 0.6 });
   }
 
+  // Leyden Rifle: the jar dumps its charge. A hard snap and thump, a buzzing
+  // ring-modulated tear that climbs then sags, crackle, and the capacitor whining down.
+  _tesla(pos) {
+    const P = validPos(pos), v = this._voice(P ? P_MED : P_HIGH, P); if (!v) return;
+    const t = this._now(), d = 0.55;
+    v.out.gain.value = P ? 1.0 : 0.7;
+    const m = this._g(v, 1);
+    link(m, this._ws(v, this.curves.hard), this._g(v, 0.7), v.out);
+    this._burst(v, m, t, { type: 'highpass', f: 3000, d: 0.012, peak: 1.2 });
+    this._burst(v, m, t, { f: 1500, q: 0.6, d: 0.06, peak: 0.9 });
+    this._tone(v, m, t, { f: 120, f2: 38, sw: 0.18, d: 0.22, peak: 1.0 });
+    const bz = this._osc(v, 'sawtooth', 70, t, t + d), ring = this._g(v, 0), bg = this._g(v);
+    bz.frequency.setValueAtTime(70, t);
+    bz.frequency.exponentialRampToValueAtTime(190, t + 0.12);
+    bz.frequency.exponentialRampToValueAtTime(48, t + d);
+    this._osc(v, 'square', 1450, t, t + d).connect(ring.gain);
+    env(bg.gain, t, 0.004, d - 0.05, 0.42);
+    link(bz, ring, this._flt(v, 'bandpass', 1800, 0.6), bg, v.out);
+    this._crackle(v, v.out, t, 0.45, { f: 5000, q: 0.7, count: 34, peak: 0.6, spread: 1.6, len: 0.008 });
+    this._tone(v, v.out, t + 0.03, { f: 3200, f2: 700, sw: 0.5, d: 0.55, peak: 0.07 });
+  }
+
+  // One hop of chain lightning landing on an enemy: a snap and a short fizz,
+  // a little higher for each hop down the chain.
+  zap(pos, hop = 0) {
+    if (!this._ok() || !this._take('zap', 5, 18)) return;
+    const P = validPos(pos), v = this._voice(P_MED, P); if (!v) return;
+    const t = this._now(), k = 1 + Math.min(hop, 9) * 0.06;
+    v.out.gain.value = 0.7;
+    this._burst(v, v.out, t, { type: 'highpass', f: 2600 * k, d: 0.01, peak: 1.1 });
+    this._crackle(v, v.out, t, 0.16, { f: 4200 * k, q: 0.8, count: 14, peak: 0.55, spread: 1.3, len: 0.006 });
+    const z = this._osc(v, 'square', 240 * k, t, t + 0.12), g = this._g(v);
+    z.frequency.setValueAtTime(240 * k, t);
+    z.frequency.exponentialRampToValueAtTime(90 * k, t + 0.11);
+    env(g.gain, t, 0.002, 0.1, 0.12);
+    link(z, this._flt(v, 'highpass', 400, 0.7), g, v.out);
+  }
+
+  // An electrocuted body frying for a moment.
+  sizzle(pos) {
+    if (!this._ok() || !this._take('sizzle', 4, 6)) return;
+    const P = validPos(pos), v = this._voice(P_LOW, P); if (!v) return;
+    const t = this._now(), d = rand(0.6, 0.9);
+    v.out.gain.value = 0.5;
+    this._crackle(v, v.out, t, d, { f: 3600, q: 0.6, count: 40, peak: 0.45, spread: 0.8, len: 0.01, fade: 0.9 });
+    this._burst(v, v.out, t, { kind: 'pink', type: 'highpass', f: 2500, a: 0.05, d, peak: 0.18 });
+  }
+
   dryFire() {
     const v = this._voice(P_HIGH); if (!v) return;
     const t = this._now();
@@ -338,6 +385,52 @@ export class AudioEngine {
       this._burst(v, o, t + 0.17, { f: 2900, q: 4, d: 0.04, peak: 1.1 });
       this._tone(v, o, t + 0.17, { wave: 'triangle', f: 2450, d: 0.09, peak: 0.08 });
       this._tone(v, o, t + 0.17, { f: 320, f2: 180, d: 0.05, peak: 0.35 });
+    } else if (stage === 'clip') {
+      // stripper clip: rounds scraping down, then the thumb's last push
+      for (let i = 0; i < 5; i++) this._burst(v, o, t + i * 0.045, { f: 2800 + i * 150, q: 3, d: 0.018, peak: 0.6 });
+      this._burst(v, o, t, { kind: 'pink', f: 1800, q: 1.2, a: 0.02, d: 0.22, peak: 0.3 });
+      this._tone(v, o, t + 0.24, { wave: 'triangle', f: 1900, d: 0.06, peak: 0.08 });
+    } else if (stage === 'open' || stage === 'close') {
+      // break-action hinge: a heavy latch and a steel clack
+      const open = stage === 'open';
+      this._burst(v, o, t, { f: open ? 1700 : 1300, q: 2.5, d: 0.04, peak: 1.1 });
+      this._tone(v, o, t, { f: open ? 260 : 190, f2: 110, d: 0.08, peak: 0.6 });
+      this._burst(v, o, t + (open ? 0.06 : 0.02), { f: 3200, q: 4, d: 0.03, peak: 0.7 });
+    } else if (stage === 'pump' || stage === 'slide') {
+      // pump rack or pistol slide slamming home
+      const pump = stage === 'pump';
+      this._burst(v, o, t, { kind: 'pink', f: pump ? 900 : 1500, f2: pump ? 1500 : 2600, q: 2, a: 0.01, d: pump ? 0.08 : 0.04, peak: 0.6 });
+      this._burst(v, o, t + (pump ? 0.12 : 0.05), { f: pump ? 1800 : 2600, q: 3, d: 0.04, peak: 1.1 });
+      this._tone(v, o, t + (pump ? 0.12 : 0.05), { f: pump ? 230 : 340, f2: 130, d: 0.06, peak: 0.45 });
+    } else if (stage === 'rocket') {
+      // a rocket sliding into the tube
+      this._burst(v, o, t, { kind: 'pink', f: 700, f2: 1400, q: 1.5, a: 0.05, d: 0.3, peak: 0.45 });
+      this._burst(v, o, t + 0.32, { f: 1200, q: 2, d: 0.05, peak: 0.9 });
+      this._tone(v, o, t + 0.32, { f: 150, f2: 80, d: 0.1, peak: 0.6 });
+    } else if (stage === 'jarOut' || stage === 'jarIn') {
+      // glass jars in a copper rack: a clink, a spark and a hiss on the way out
+      const out = stage === 'jarOut';
+      this._tone(v, o, t, { f: out ? 2250 : 2600, d: 0.25, peak: 0.07 });
+      this._tone(v, o, t + 0.015, { f: out ? 3420 : 3900, d: 0.18, peak: 0.04 });
+      this._burst(v, o, t, { f: 2400, q: 3, d: 0.03, peak: 0.7 });
+      if (out) {
+        this._crackle(v, o, t, 0.12, { f: 4800, q: 0.8, count: 8, peak: 0.4 });
+        this._burst(v, o, t + 0.02, { type: 'highpass', f: 3500, a: 0.02, d: 0.35, peak: 0.25 });
+      } else {
+        this._burst(v, o, t + 0.08, { f: 1500, q: 2, d: 0.04, peak: 1.0 });
+        this._tone(v, o, t + 0.08, { f: 260, f2: 140, d: 0.07, peak: 0.45 });
+      }
+    } else if (stage === 'crank') {
+      // ratchet teeth
+      for (let i = 0; i < 6; i++) this._burst(v, o, t + i * 0.035, { f: 3000 + (i % 2) * 400, q: 4, d: 0.012, peak: 0.55 });
+    } else if (stage === 'charge') {
+      // the jars coming back up: a rising hum and a spark
+      const s = this._osc(v, 'sawtooth', 60, t, t + 0.5), g = this._g(v);
+      s.frequency.setValueAtTime(60, t);
+      s.frequency.exponentialRampToValueAtTime(420, t + 0.45);
+      env(g.gain, t, 0.3, 0.2, 0.08);
+      link(s, this._flt(v, 'bandpass', 900, 0.8), g, o);
+      this._crackle(v, o, t + 0.35, 0.1, { f: 5000, q: 0.8, count: 6, peak: 0.35 });
     } else if (stage === 'shell') {
       this._burst(v, o, t, { f: 3200, q: 3, d: 0.02, peak: 0.7 });
       this._tone(v, o, t, { f: 420, f2: 260, d: 0.04, peak: 0.3 });
@@ -942,10 +1035,21 @@ export class AudioEngine {
     this._amb = { v, nextRumble: t + rand(6, 15), nextCrow: t + rand(30, 70) };
   }
 
-  stopAmbience() {
+  stopAmbience(fade = 2) {
     const a = this._amb;
     this._amb = null;
-    if (a && this.ctx) this._kill(a.v, 2);
+    if (a && this.ctx) this._kill(a.v, fade);
+  }
+
+  // Leaving a match: every sound of that world fades out. Voices, ambience, the
+  // boss music and the low-health heartbeat and muffle all stop, so nothing
+  // follows the player back to the menu.
+  silence(fade = 0.3) {
+    this.stopAmbience(fade);
+    this._boss = null;
+    this.setHeartbeat(0);
+    if (!this.ctx) return;
+    for (const v of [...this.voices]) if (!v.dying) this._kill(v, fade);
   }
 
   _rumble(t) {

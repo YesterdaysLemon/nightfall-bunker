@@ -1,28 +1,29 @@
 // Two-level navigation grid for the building interior with stair portals,
 // plus a multi-source Dijkstra flow field toward the nearest living player.
+// Built from a map (map.js; the bunker by default). Current limits a new map must
+// fit: two floors (the ground and one at map.LOFT_Y) and stairs that climb along x.
 
-import {
-  BX0, BZ0, BX1, BZ1, IX0, IX1, IZ0, IZ1, LOFT_Y, STAIRS, stairFootprint, stairHeightAt,
-  buildStaticBoxes, DOORS,
-} from './map.js';
+import { BUNKER } from './map.js';
 
 export const CELL = 0.5;
-const NX = Math.round((BX1 - BX0) / CELL);
-const NZ = Math.round((BZ1 - BZ0) / CELL);
-const PER = NX * NZ;
 const INFLATE = 0.3;
 const SQ2 = Math.SQRT2;
 
 export class NavGrid {
-  constructor() {
-    this.nx = NX; this.nz = NZ;
-    this.walk = new Uint8Array(PER * 2);
-    this.height = new Float32Array(PER * 2);
-    this.dist = new Float32Array(PER * 2).fill(Infinity);
+  constructor(map = BUNKER) {
+    this.map = map;
+    this.x0 = map.BX0; this.z0 = map.BZ0;
+    this.nx = Math.round((map.BX1 - map.BX0) / CELL);
+    this.nz = Math.round((map.BZ1 - map.BZ0) / CELL);
+    this.per = this.nx * this.nz;
+    const cells = this.per * 2;
+    this.walk = new Uint8Array(cells);
+    this.height = new Float32Array(cells);
+    this.dist = new Float32Array(cells).fill(Infinity);
     this.portals = new Map();
     this.openDoors = new Set();
-    this.static = buildStaticBoxes();
-    this.heap = new MinHeap(PER * 2 * 4);
+    this.static = map.buildStaticBoxes();
+    this.heap = new MinHeap(cells * 4);
     this.build();
   }
 
@@ -31,15 +32,17 @@ export class NavGrid {
     this.build();
   }
 
-  index(level, ix, iz) { return level * PER + iz * NX + ix; }
+  index(level, ix, iz) { return level * this.per + iz * this.nx + ix; }
   center(i) {
-    const level = i >= PER ? 1 : 0;
-    const j = i - level * PER;
-    const ix = j % NX, iz = (j / NX) | 0;
-    return [BX0 + (ix + 0.5) * CELL, this.height[i], BZ0 + (iz + 0.5) * CELL];
+    const level = i >= this.per ? 1 : 0;
+    const j = i - level * this.per;
+    const ix = j % this.nx, iz = (j / this.nx) | 0;
+    return [this.x0 + (ix + 0.5) * CELL, this.height[i], this.z0 + (iz + 0.5) * CELL];
   }
 
   build() {
+    const { IX0, IX1, IZ0, IZ1, LOFT_Y, STAIRS, DOORS, stairFootprint, stairHeightAt } = this.map;
+    const NX = this.nx, NZ = this.nz, BX0 = this.x0, BZ0 = this.z0;
     const blockers = [
       ...this.static.filter((b) => b.tag !== 'step' && b.tag !== 'floor0' && b.tag !== 'roof'),
       ...DOORS.filter((d) => !this.openDoors.has(d.id)).map((d) => ({ b: d.box, tag: d.kind })),
@@ -93,14 +96,14 @@ export class NavGrid {
   }
 
   locateLevel(level, x, z) {
-    const ix = Math.floor((x - BX0) / CELL), iz = Math.floor((z - BZ0) / CELL);
-    if (ix < 0 || iz < 0 || ix >= NX || iz >= NZ) return -1;
+    const ix = Math.floor((x - this.x0) / CELL), iz = Math.floor((z - this.z0) / CELL);
+    if (ix < 0 || iz < 0 || ix >= this.nx || iz >= this.nz) return -1;
     return this.index(level, ix, iz);
   }
 
   // Exact cell under a position (no neighbour fallback), or -1.
   locateStrict(x, y, z) {
-    const tryLevels = y > LOFT_Y - 0.6 ? [1, 0] : [0, 1];
+    const tryLevels = y > this.map.LOFT_Y - 0.6 ? [1, 0] : [0, 1];
     for (const level of tryLevels) {
       const i = this.locateLevel(level, x, z);
       if (i >= 0 && this.walk[i] && Math.abs(this.height[i] - y) < 1.2) return i;
@@ -111,12 +114,13 @@ export class NavGrid {
   // Cell for a world position. Stairs belong to level 0. Falls back to the
   // nearest walkable cell within one ring so wall-huggers still resolve.
   locate(x, y, z) {
-    const tryLevels = y > LOFT_Y - 0.6 ? [1, 0] : [0, 1];
+    const upper = y > this.map.LOFT_Y - 0.6;
+    const tryLevels = upper ? [1, 0] : [0, 1];
     for (const level of tryLevels) {
       const i = this.locateLevel(level, x, z);
       if (i >= 0 && this.walk[i] && Math.abs(this.height[i] - y) < 1.2) return i;
     }
-    const level = y > LOFT_Y - 0.6 ? 1 : 0;
+    const level = upper ? 1 : 0;
     let best = -1, bd = Infinity;
     for (let dz = -1; dz <= 1; dz++) {
       for (let dx = -1; dx <= 1; dx++) {
@@ -134,6 +138,7 @@ export class NavGrid {
 
   // Calls fn(neighbour, cost) for every traversable edge out of i.
   neighbours(i, fn) {
+    const NX = this.nx, NZ = this.nz, PER = this.per;
     const level = i >= PER ? 1 : 0;
     const j = i - level * PER;
     const ix = j % NX, iz = (j / NX) | 0;
@@ -187,7 +192,7 @@ export class NavGrid {
     return best;
   }
 
-  levelOf(i) { return i >= PER ? 1 : 0; }
+  levelOf(i) { return i >= this.per ? 1 : 0; }
 }
 
 class MinHeap {

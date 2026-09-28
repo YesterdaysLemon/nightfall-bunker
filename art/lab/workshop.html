@@ -1,0 +1,2025 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Model Workshop</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Special+Elite&family=Stardos+Stencil:wght@400;700&display=swap">
+<style>
+  /* Nightfall Bunker's palette. The workshop is a dark room in either theme; the
+     paper viewport is its light surface, so the tokens hold in both. */
+  :root {
+    color-scheme: dark;
+    --bg: #0b0d10;
+    --panel: #14171b;
+    --panel2: #1b1f24;
+    --ink: #ece6d6;
+    --ink-dim: #a39c8b;
+    --ink-faint: #767063;
+    --blood: #b3130f;
+    --blood-bright: #e2261c;
+    --gold: #ffcf6a;
+    --paper: #e6dfcb;
+    --line: rgba(236, 230, 214, 0.14);
+    --line-strong: rgba(236, 230, 214, 0.3);
+    --type: 'Special Elite', 'Courier New', monospace;
+    --stencil: 'Stardos Stencil', Impact, 'Arial Narrow', sans-serif;
+  }
+  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { color-scheme: dark; } }
+  :root[data-theme="dark"] { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 400 14px/1.45 var(--type); -webkit-font-smoothing: antialiased; }
+  button, select, input, textarea { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--blood-bright); outline-offset: 2px; }
+  .app { display: grid; grid-template-columns: 220px minmax(0, 1fr) 336px; grid-template-rows: auto minmax(0, 1fr); height: 100%; }
+  header { grid-column: 1 / -1; display: flex; align-items: center; gap: 18px; flex-wrap: wrap; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { margin: 0; font: 700 22px/1 var(--stencil); text-transform: uppercase; letter-spacing: 0.02em; }
+  header h1 span { color: var(--blood-bright); }
+  .tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+  .tabs button, .seg button { background: transparent; border: 1px solid var(--line-strong); padding: 5px 10px; cursor: pointer; font-size: 13px; min-height: 32px; }
+  .tabs button[aria-pressed="true"], .seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .status { margin-left: auto; font-size: 12px; color: var(--ink-dim); }
+  .rail { border-right: 1px solid var(--line); padding: 12px; display: flex; flex-direction: column; gap: 16px; overflow: auto; background: var(--panel); }
+  h2 { margin: 0 0 8px; font: 700 12px/1 var(--stencil); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-dim); }
+  .modes { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+  .modes button { background: transparent; border: 1px solid var(--line-strong); padding: 6px 8px; cursor: pointer; font: 700 14px/1 var(--stencil); letter-spacing: 0.06em; text-transform: uppercase; min-height: 34px; }
+  .modes button[aria-pressed="true"] { background: var(--blood); border-color: var(--blood-bright); color: #fff; }
+  .tools { display: grid; gap: 4px; }
+  .tool { display: grid; grid-template-columns: 22px 1fr auto; align-items: center; gap: 8px; text-align: left; background: transparent; border: 1px solid transparent; padding: 6px 8px; cursor: pointer; min-height: 36px; }
+  .tool:hover { border-color: var(--line-strong); }
+  .tool[aria-pressed="true"] { background: var(--panel2); border-color: var(--blood-bright); }
+  .tool svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .tool kbd { font-size: 11px; color: var(--ink-faint); font-family: var(--type); }
+  .seg { display: flex; flex-wrap: wrap; gap: 4px; }
+  .checks { display: grid; gap: 6px; margin-top: 10px; }
+  .check { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; }
+  .check input { accent-color: var(--blood-bright); width: 16px; height: 16px; flex: none; }
+  .stage { position: relative; min-width: 0; min-height: 0; background: var(--paper); overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
+  .stage canvas { display: block; width: 100%; height: 100%; }
+  .stage.lowres canvas { image-rendering: pixelated; }
+  .rigsvg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+  .overlay { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+  .brush { position: absolute; border: 1.5px solid var(--blood-bright); border-radius: 50%; transform: translate(-50%, -50%); display: none; box-shadow: 0 0 0 1px rgba(255,255,255,0.4); }
+  .boxsel { position: absolute; border: 1px dashed var(--blood-bright); background: rgba(226, 38, 28, 0.08); display: none; }
+  .inset { position: absolute; right: 12px; bottom: 12px; width: 28%; height: 28%; border: 1px solid rgba(22,19,15,0.45); display: none; }
+  .inset.on { display: block; }
+  .stage.dark .inset { border-color: rgba(236,230,214,0.35); }
+  .pin { position: absolute; transform: translate(-50%, -50%); pointer-events: auto; cursor: pointer; border-radius: 50%; border: 2px solid #fff; display: grid; place-items: center; font: 700 11px/1 var(--type); color: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.6); padding: 0; text-shadow: 0 1px 1px rgba(0,0,0,0.7); }
+  .pin.back { opacity: 0.35; }
+  .pin.sel { outline: 2px solid var(--gold); outline-offset: 2px; }
+  .viewtag { position: absolute; left: 12px; top: 10px; font: 700 13px/1 var(--stencil); letter-spacing: 0.16em; text-transform: uppercase; color: rgba(22, 19, 15, 0.55); pointer-events: none; }
+  .stage.dark .viewtag { color: rgba(236, 230, 214, 0.5); }
+  .hover { position: absolute; pointer-events: none; font-size: 12px; padding: 2px 6px; background: rgba(11,13,16,0.85); color: var(--ink); border: 1px solid var(--line-strong); white-space: nowrap; display: none; transform: translate(12px, 12px); }
+  .hint { position: absolute; left: 12px; bottom: 10px; max-width: 62%; font-size: 12px; color: rgba(22,19,15,0.78); pointer-events: none; }
+  .stage.dark .hint { color: rgba(236,230,214,0.72); }
+  .corner { position: absolute; right: 12px; top: 8px; display: flex; gap: 6px; }
+  .corner button { background: rgba(22,19,15,0.08); border: 1px solid rgba(22,19,15,0.3); color: #16130f; padding: 3px 9px; cursor: pointer; font-size: 12px; }
+  .stage.dark .corner button { color: var(--ink); border-color: var(--line-strong); background: rgba(0,0,0,0.25); }
+  .corner button[hidden] { display: none; }
+  .side { border-left: 1px solid var(--line); padding: 12px; overflow: auto; background: var(--panel); display: flex; flex-direction: column; gap: 18px; }
+  .field { display: grid; gap: 4px; font-size: 12px; color: var(--ink-dim); }
+  .field input[type="range"] { width: 100%; accent-color: var(--blood-bright); }
+  .field output { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .btn { background: transparent; border: 1px solid var(--line-strong); padding: 5px 10px; cursor: pointer; font-size: 13px; min-height: 32px; }
+  .btn:hover:not(:disabled) { border-color: var(--ink); }
+  .btn.warn { border-color: var(--blood); color: #ffb3a8; }
+  .btn.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  .btn:disabled { opacity: 0.4; cursor: default; }
+  .opts { display: grid; gap: 10px; }
+  .toolhelp { font-size: 12px; color: var(--ink-dim); margin: 0; }
+  .empty { color: var(--ink-faint); font-size: 12px; margin: 0; }
+  .palette { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+  .palette button { background: transparent; border: 1px solid var(--line-strong); padding: 6px 4px; cursor: pointer; display: grid; justify-items: center; gap: 2px; font-size: 12px; }
+  .palette button[aria-pressed="true"] { border-color: var(--blood-bright); background: var(--panel2); }
+  .palette svg { width: 26px; height: 26px; stroke: currentColor; fill: none; stroke-width: 1.5; stroke-linejoin: round; }
+  .notes { display: grid; gap: 8px; }
+  .note { border: 1px solid var(--line); padding: 8px; display: grid; gap: 6px; background: var(--panel2); }
+  .note.sel { border-color: var(--gold); }
+  .note.gone { opacity: 0.55; }
+  .note .head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .note .num { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; color: #fff; border: 1.5px solid #fff; flex: none; text-shadow: 0 1px 1px rgba(0,0,0,0.7); }
+  .note .part { font-size: 12px; color: var(--ink-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .note textarea { width: 100%; min-height: 46px; resize: vertical; background: var(--bg); border: 1px solid var(--line-strong); padding: 5px 7px; }
+  .note select { background: var(--bg); border: 1px solid var(--line-strong); padding: 3px 5px; font-size: 12px; min-width: 0; }
+  .page { position: relative; background: #000; border: 1px solid var(--line); }
+  .page canvas { display: block; width: 100%; height: auto; image-rendering: pixelated; cursor: pointer; }
+  .page.picking { outline: 2px solid var(--gold); }
+  .tree { display: grid; gap: 1px; font-size: 12px; max-height: 280px; overflow: auto; border: 1px solid var(--line); padding: 4px; }
+  .tree button { text-align: left; background: transparent; border: 0; padding: 3px 4px; cursor: pointer; display: flex; justify-content: space-between; gap: 8px; }
+  .tree button:hover { background: var(--panel2); }
+  .tree button[aria-pressed="true"] { background: var(--panel2); color: var(--gold); }
+  .tree small { color: var(--ink-faint); }
+  .stats { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .stats td { padding: 2px 4px; border-bottom: 1px solid var(--line); }
+  .stats td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  .stats tr.total td { color: var(--ink); border-bottom: 0; padding-top: 6px; }
+  .stats tr.hot td { color: var(--gold); }
+  .banner { border: 1px solid var(--gold); padding: 8px; font-size: 12px; color: var(--gold); }
+  input[type="color"] { width: 48px; height: 30px; border: 1px solid var(--line-strong); background: var(--bg); padding: 1px; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  @media (max-width: 900px) {
+    .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 60vh auto auto; height: auto; }
+    header { gap: 10px; }
+    .stage { grid-row: 2; }
+    .rail { grid-row: 3; border-right: 0; border-top: 1px solid var(--line); flex-direction: row; flex-wrap: wrap; }
+    .rail > section { flex: 1 1 240px; }
+    .modes { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+    .modes button { font-size: 12px; padding: 6px 2px; }
+    .tools { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+    .tool kbd { display: none; }
+    .side { grid-row: 4; border-left: 0; border-top: 1px solid var(--line); }
+    .status { margin-left: 0; width: 100%; }
+    .inset { width: 34%; height: 34%; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>Model <span>Workshop</span></h1>
+    <div class="tabs" id="models" role="group" aria-label="Model"></div>
+    <div class="status" id="status" role="status">Loading models…</div>
+  </header>
+
+  <aside class="rail" aria-label="Modes, tools and views">
+    <section>
+      <h2>Mode</h2>
+      <div class="modes" id="modes" role="group" aria-label="Mode"></div>
+    </section>
+    <section>
+      <h2>Tools</h2>
+      <div class="tools" id="tools"></div>
+    </section>
+    <section>
+      <h2>Project</h2>
+      <div class="seg" id="views" role="group" aria-label="Projection"></div>
+    </section>
+    <section>
+      <h2>Show</h2>
+      <div class="seg" id="looks" role="group" aria-label="Look"></div>
+      <div class="checks">
+        <label class="check"><input id="inset" type="checkbox" checked> Inset of the other look</label>
+        <label class="check"><input id="ghost" type="checkbox" checked> Original in red</label>
+        <label class="check"><input id="mirror" type="checkbox" checked> Mirror left and right</label>
+        <label class="check"><input id="wire" type="checkbox"> Triangle edges</label>
+        <label class="check"><input id="bones" type="checkbox"> Bones</label>
+        <label class="check"><input id="pinsOn" type="checkbox" checked> Texture notes</label>
+        <label class="check"><input id="lowres" type="checkbox"> Game resolution (240 lines)</label>
+      </div>
+      <div id="variant" style="margin-top:12px"></div>
+    </section>
+  </aside>
+
+  <main class="stage" id="stage">
+    <canvas id="view" aria-label="Model viewport"></canvas>
+    <svg class="rigsvg" id="rig" aria-hidden="true"></svg>
+    <div class="overlay" id="overlay"><div class="brush" id="brush"></div><div class="boxsel" id="boxsel"></div><div class="inset" id="insetFrame"></div></div>
+    <div class="viewtag" id="viewtag"></div>
+    <div class="hover" id="hover"></div>
+    <div class="corner"><button id="restBtn" type="button" hidden>Rest pose</button><button id="fit" type="button">Fit</button></div>
+    <div class="hint" id="hint"></div>
+  </main>
+
+  <aside class="side" aria-label="Options">
+    <section class="opts" id="opts"></section>
+    <section class="opts" id="panel"></section>
+    <section>
+      <h2>Edits</h2>
+      <div class="row">
+        <button class="btn" id="undo" type="button">Undo</button>
+        <button class="btn" id="redo" type="button">Redo</button>
+        <button class="btn warn" id="reset" type="button">Reset model</button>
+        <button class="btn" id="copy" type="button">Copy JSON</button>
+      </div>
+      <p class="toolhelp" id="summary" style="margin-top:8px"></p>
+    </section>
+  </aside>
+</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.min.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+/*__EDITOPS__*/
+
+const $ = (id) => document.getElementById(id);
+const el = (tag, props = {}, ...kids) => {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === 'class') n.className = v;
+    else if (k === 'text') n.textContent = v;
+    else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
+    else if (k === 'value') n.value = v;
+    else if (k === 'checked' || k === 'selected') n[k] = !!v;
+    else if (v !== undefined && v !== null && v !== false) n.setAttribute(k, v === true ? '' : v);
+  }
+  for (const c of kids.flat()) if (c != null) n.append(c.nodeType ? c : document.createTextNode(c));
+  return n;
+};
+const svgEl = (tag, attrs = {}) => { const n = document.createElementNS('http://www.w3.org/2000/svg', tag); for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v); return n; };
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const r4 = (v) => Math.round(v * 10000) / 10000;
+const smoothstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+const lerp = (a, b, t) => a + (b - a) * t;
+const TAU = Math.PI * 2;
+
+// --- Catalogue ----------------------------------------------------------------------------------
+const MODELS = [
+  { id: 'ghoul', label: 'Ghoul', file: 'ghoul', anims: ['idle', 'walk', 'run', 'attack', 'rise'] },
+  { id: 'hound', label: 'Hellhound', file: 'hound', anims: ['stand', 'trot', 'gallop', 'pounce'] },
+  { id: 'kintsugi', label: 'Kintsugi', file: 'kintsugi', anims: ['sway'] },
+  { id: 'survivor', label: 'Survivor', file: 'survivor', anims: ['sway'] },
+  { id: 'figurine', label: 'Figurine', file: 'kintsugi', only: ['figurine', 'figbase'], anims: [] },
+  { id: 'teacup', label: 'Teacup', file: 'kintsugi', only: ['teacup'], anims: [] },
+];
+const ANIM_LABEL = { idle: 'Idle', walk: 'Walk', run: 'Run', attack: 'Attack', rise: 'Rise', stand: 'Stand', trot: 'Trot', gallop: 'Gallop', pounce: 'Pounce', sway: 'Sway' };
+const TAGS = {
+  wear: ['Worn edges', '#b89a5e'], grime: ['Grime / dirt', '#6e6040'], blood: ['Blood', '#c8231b'],
+  rust: ['Rust', '#b0582a'], fabric: ['Fabric / seams', '#5f7d3c'], mark: ['Insignia / marking', '#3f6fbf'],
+  glow: ['Glow', '#d9a21f'], skin: ['Skin detail', '#a9786a'], other: ['Other', '#7a6d9a'],
+};
+const ICON = {
+  move: '<path d="M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3"/>',
+  inflate: '<circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="9" stroke-dasharray="2 3"/>',
+  smooth: '<path d="M3 15c3-6 6 2 9-4s6 2 9-2"/><path d="M3 20h18"/>',
+  size: '<rect x="7" y="7" width="10" height="10"/><path d="M2 12h3M19 12h3M12 2v3M12 19v3"/>',
+  pose: '<circle cx="6" cy="18" r="2"/><circle cx="12" cy="10" r="2"/><circle cx="19" cy="5" r="2"/><path d="M7.5 16.5l3-4.5M13.7 8.8l3.6-2.6"/>',
+  joint: '<circle cx="12" cy="12" r="3"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/>',
+  vsel: '<path d="M4 20l8-16 8 16z"/><circle cx="12" cy="4" r="2.2" fill="currentColor"/><circle cx="4" cy="20" r="2.2" fill="currentColor"/><circle cx="20" cy="20" r="2.2" fill="currentColor"/>',
+  fsel: '<path d="M4 20l8-16 8 16z" fill="currentColor" fill-opacity="0.35"/>',
+  poke: '<path d="M3 20h18M7 20l5-14 5 14"/>',
+  place: '<path d="M12 3l3 7h-6z"/><path d="M4 21c0-5 4-8 8-8s8 3 8 8"/>',
+  note: '<path d="M12 21s-6-5.5-6-10a6 6 0 1 1 12 0c0 4.5-6 10-6 10z"/><circle cx="12" cy="11" r="2"/>',
+  tint: '<path d="M12 3c3 4 6 7 6 11a6 6 0 0 1-12 0c0-4 3-7 6-11z"/>',
+};
+const TOOLS = {
+  move: { label: 'Push / pull', key: 'M', help: 'Drag on the model to push or pull its shape. In a flat view the brush reaches through the model; in Orbit it prods the surface you grab.' },
+  inflate: { label: 'Swell / pinch', key: 'I', help: 'Drag up to swell a region out along its surface, down to pinch it in.' },
+  smooth: { label: 'Smooth', key: 'O', help: 'Scrub over lumpy or jagged areas to relax them toward their neighbours.' },
+  size: { label: 'Size & stretch', key: 'S', help: 'Scroll over a part to grow or shrink it. Drag on a part to stretch it sideways or lengthwise. What hangs off it follows.' },
+  pose: { label: 'Pose', key: 'P', help: 'Drag a joint ball (or a square tip) to swing that limb. Posing is only for looking; any editing tool snaps back to the rest pose.' },
+  joint: { label: 'Move joint', key: 'J', help: 'Drag a joint ball to move it. Its parts and everything below follow, and the bone leading to it stretches. This changes the model.' },
+  vsel: { label: 'Vertices', key: 'V', help: 'Click corners to select them (Shift adds). Drag a selected corner to move the selection. In a flat view, drag on empty space to box-select.' },
+  fsel: { label: 'Triangles', key: 'T', help: 'Click triangles to select them (Shift adds). Delete removes them. In a flat view, drag on empty space to box-select.' },
+  poke: { label: 'Poke a point', key: 'K', help: 'Press on a triangle and drag up to raise a point from its middle, down to dent it. With triangles selected, pokes them all.' },
+  place: { label: 'Add part', key: 'A', help: 'Pick a shape, then click the model to snap it on. Drag a placed part to slide it, scroll over it to size it.' },
+  note: { label: 'Texture note', key: 'N', help: 'Click the model to pin a note about what its texture should show there.' },
+  tint: { label: 'Tint part', key: 'C', help: 'Click a part to tint or brighten its texture. Switch the look to Textured to see it best.' },
+};
+const MODES = [
+  { id: 'mold', label: 'Mold', tools: ['move', 'inflate', 'smooth', 'size'] },
+  { id: 'rig', label: 'Rig', tools: ['pose', 'joint'] },
+  { id: 'mesh', label: 'Tris', tools: ['vsel', 'fsel', 'poke'] },
+  { id: 'parts', label: 'Parts', tools: ['place'] },
+  { id: 'paint', label: 'Paint', tools: ['note', 'tint'] },
+];
+const KIND_LIST = [
+  ['spike', 'Spike', '<path d="M5 21h14L12 3z"/>'],
+  ['horn', 'Horn', '<path d="M6 21c0-7 2-13 12-17-5 5-6 10-6 17z"/>'],
+  ['fin', 'Fin', '<path d="M3 20h18L8 5z"/>'],
+  ['blob', 'Blob', '<path d="M12 3l8 5v8l-8 5-8-5V8z"/><path d="M4 8l8 5 8-5M12 13v8"/>'],
+  ['box', 'Box', '<path d="M4 8l8-4 8 4v9l-8 4-8-4z"/><path d="M4 8l8 4 8-4M12 12v9"/>'],
+  ['tooth', 'Tooth', '<path d="M8 4h8l-4 17z"/>'],
+];
+const VIEWS = [['front', 'Front'], ['left', 'Left'], ['right', 'Right'], ['back', 'Back'], ['top', 'Top'], ['orbit', 'Orbit']];
+const PLAYER = ['#f2efe6', '#6aa9ff', '#ffd24a', '#6fdc7a'];
+const PAGE0 = { b: 1, c: 1, s: 1, h: 0 };
+const EDIT_TOOLS = new Set(['move', 'inflate', 'smooth', 'size', 'joint', 'vsel', 'fsel', 'poke', 'place']);
+
+// --- State ----------------------------------------------------------------------------------------
+const ui = {
+  model: 'ghoul', mode: 'mold', tool: 'move', view: 'front', look: 'sil',
+  radius: 0.06, strength: 1, lock: 'free', only: false, headwear: 'cap', slot: 0,
+  selNote: null, selPart: null, selJoint: null, selAdd: null,
+  kind: 'spike', partS: 0.03, partLen: 0.08, partLean: 20, partTwist: 0,
+  anim: null, animSpeed: 1, pickColour: false,
+};
+const lastTool = { mold: 'move', rig: 'pose', mesh: 'vsel', parts: 'place', paint: 'note' };
+const labs = {};   // model id -> { rev, ops, notes, tints, page, nextId, updatedAt }
+const hist = {};
+const blank = (rev = 'r0') => ({ rev, ops: [], notes: [], tints: {}, page: { ...PAGE0 }, nextId: 1, updatedAt: '' });
+const lab = (id = ui.model) => (labs[id] ||= blank());
+const his = () => (hist[ui.model] ||= { undo: [], redo: [] });
+function remember() {
+  const h = his();
+  h.undo.push(JSON.stringify(lab()));
+  h.redo.length = 0;
+  if (h.undo.length > 200) h.undo.shift();
+}
+const sel = { verts: new Map(), faces: new Map() };  // part -> Set(weld group) / Set(face)
+
+// --- Three ----------------------------------------------------------------------------------------
+const canvas = $('view');
+const stage = $('stage');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+const scene = new THREE.Scene();
+const ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 100);
+const persp = new THREE.PerspectiveCamera(35, 1, 0.01, 100);
+const controls = new OrbitControls(persp, canvas);
+controls.enableDamping = true;
+controls.enabled = false;
+scene.add(new THREE.HemisphereLight(0xb8c4d0, 0x3a2e22, 1.3));
+const key = new THREE.DirectionalLight(0xffe2b8, 2.2); key.position.set(0.6, 3, 2.2); scene.add(key);
+const fill = new THREE.DirectionalLight(0x9fb4c8, 0.7); fill.position.set(-2, 1, -1.5); scene.add(fill);
+const head = new THREE.DirectionalLight(0xfff4e0, 0.9); scene.add(head, head.target);
+const PAPER = new THREE.Color(0xe6dfcb), DARK = new THREE.Color(0x1c1f1b);
+const silMat = new THREE.MeshBasicMaterial({ color: 0x16130f, side: THREE.DoubleSide, depthTest: false, depthWrite: false });
+const selMat = new THREE.MeshBasicMaterial({ color: 0x8a1c12, side: THREE.DoubleSide, depthTest: false, depthWrite: false });
+const ghostMat = new THREE.MeshBasicMaterial({ color: 0xe0877a, side: THREE.DoubleSide, depthTest: false, depthWrite: false });
+const GHOST_SIL = new THREE.Color(0xe0877a), GHOST_TEX = new THREE.Color(0x6e2a22);
+const wireSil = new THREE.MeshBasicMaterial({ color: 0xe6dfcb, wireframe: true, transparent: true, opacity: 0.4, depthTest: false });
+const wireTex = new THREE.MeshBasicMaterial({ color: 0xffe9b0, wireframe: true, transparent: true, opacity: 0.35 });
+const wireHot = new THREE.MeshBasicMaterial({ color: 0xffcf6a, wireframe: true, transparent: true, opacity: 0.9, depthTest: false });
+const ptsMat = new THREE.PointsMaterial({ color: 0x3fa0ff, size: 5, sizeAttenuation: false, depthTest: false, transparent: true, opacity: 0.8 });
+const ptsSelMat = new THREE.PointsMaterial({ color: 0xffb020, size: 10, sizeAttenuation: false, depthTest: false });
+const faceSelMat = new THREE.MeshBasicMaterial({ color: 0xff5a2a, transparent: true, opacity: 0.55, depthTest: false, side: THREE.DoubleSide });
+const markers = new THREE.Group(); scene.add(markers);  // vertex dots and selected triangles (main view only)
+
+const files = {};
+const pages = {};
+let M = null;       // the model on screen
+const loadImage = (url) => new Promise((res) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => res(null); i.src = url; });
+function crisp(t) { t.colorSpace = THREE.SRGBColorSpace; t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestMipmapLinearFilter; t.flipY = false; return t; }
+
+async function loadFile(file) {
+  if (files[file]) return files[file];
+  const res = await fetch(`models/${file}.json`);
+  if (!res.ok) throw new Error(`models/${file}.json: ${res.status}`);
+  const data = await res.json();
+  const [img, glowImg] = await Promise.all([loadImage(`models/${data.texture}`), data.emissive ? loadImage(`models/${data.emissive}`) : null]);
+  const glow = glowImg ? crisp(new THREE.Texture(glowImg)) : null;
+  if (glow) glow.needsUpdate = true;
+  return (files[file] = { data, img, glow });
+}
+
+const filterOK = (() => { try { return 'filter' in document.createElement('canvas').getContext('2d'); } catch { return false; } })();
+function pageFor(id, img) {
+  let p = pages[id];
+  if (!p) {
+    const c = document.createElement('canvas');
+    c.width = img ? img.naturalWidth : 4; c.height = img ? img.naturalHeight : 4;
+    p = pages[id] = { canvas: c, tex: crisp(new THREE.CanvasTexture(c)), img };
+  }
+  paintPage(id);
+  return p;
+}
+function paintPage(id) {
+  const p = pages[id];
+  if (!p || !p.img) return;
+  const a = lab(id).page || PAGE0;
+  const ctx = p.canvas.getContext('2d');
+  ctx.clearRect(0, 0, p.canvas.width, p.canvas.height);
+  if (filterOK) ctx.filter = `brightness(${a.b}) contrast(${a.c}) saturate(${a.s}) hue-rotate(${a.h}deg)`;
+  ctx.drawImage(p.img, 0, 0);
+  if (filterOK) ctx.filter = 'none';
+  p.tex.needsUpdate = true;
+}
+
+const modelRev = (data, def) => data.meta?.revs?.[def.id] || (def.only ? 'r0' : data.meta?.rev) || 'r0';
+// Edits saved against an older version of the model (before a bake) are set aside,
+// kept in full so they can still be baked onto that version or replayed by hand.
+function checkRev(id, rev) {
+  const L = lab(id);
+  if ((L.rev || 'r0') === rev) return;
+  if (L.ops.length) L.stale = { rev: L.rev || 'r0', ops: L.ops, at: L.updatedAt || '' };
+  L.ops = [];
+  L.rev = rev;
+  hist[id] = { undo: [], redo: [] };
+}
+
+// --- Building a model -------------------------------------------------------------------------------
+function hidden(name) {
+  const meta = M.data.meta || {};
+  if ((meta.headwear || []).includes(name)) return name !== ui.headwear;
+  if (!M.def.only && meta.showAt && name in meta.showAt) return true;
+  return false;
+}
+
+async function buildModel() {
+  const def = MODELS.find((m) => m.id === ui.model);
+  let f;
+  try { f = await loadFile(def.file); } catch (e) { status(`Could not load ${def.label}: ${e.message}`); return; }
+  if (def.id !== ui.model) return;
+  const data = f.data;
+  if (M) { scene.remove(M.rig.root, M.ghost); for (const d of M.disp.values()) dropDisp(d); }
+  const base = stateFrom(data, def.only ? (p) => def.only.includes(p.name) : (p) => p.joint != null);
+  const rev = modelRev(data, def);
+  checkRev(def.id, rev);
+  M = { def, data, f, base, rev, page: pageFor(def.id, f.img), disp: new Map(), committed: null, shown: null, posed: false, welds: new WeakMap() };
+  // Rig: one node per joint, parts hang from their joint's node.
+  const root = new THREE.Group();
+  const nodes = {};
+  for (const n of Object.keys(base.joints)) { nodes[n] = new THREE.Object3D(); nodes[n].name = n; }
+  for (const [n, j] of Object.entries(base.joints)) { (j.parent && nodes[j.parent] ? nodes[j.parent] : root).add(nodes[n]); nodes[n].position.fromArray(j.pos); }
+  M.rig = { root, nodes };
+  scene.add(root);
+  // The original, flat in world space, for the red comparison outline.
+  M.ghost = new THREE.Group();
+  for (const it of instances(base)) {
+    if (hidden(it.part)) continue;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(it.p.pos, 3));
+    g.setIndex(it.p.idx);
+    const m = new THREE.Mesh(g, ghostMat);
+    m.position.fromArray(it.origin);
+    if (it.flipX) m.scale.x = -1;
+    m.renderOrder = 0;
+    M.ghost.add(m);
+  }
+  scene.add(M.ghost);
+  M.ghost.updateMatrixWorld(true);
+  M.box = new THREE.Box3().setFromObject(M.ghost);
+  if (M.box.isEmpty()) M.box.set(new THREE.Vector3(-0.5, 0, -0.5), new THREE.Vector3(0.5, 1.8, 0.5));
+  clearSel();
+  ui.selAdd = null; ui.selJoint = null; ui.selPart = null; ui.selNote = null; ui.anim = null;
+  commitAll();
+  setView(ui.view, true);
+  renderAll();
+}
+
+// Replay every edit from the file's model.
+function commitAll() {
+  M.committed = replay(M.base, lab().ops);
+  M.tips = tipsOf(M.committed);
+  show(M.committed);
+}
+// Keep one finished edit.
+function commitOp(op) {
+  remember();
+  lab().ops.push(op);
+  applyOp(M.committed, op);
+  if (op.t === 'joint' || op.t === 'stretch' || op.t === 'add') M.tips = tipsOf(M.committed);
+  show(M.committed);
+  if (['poke', 'del', 'add'].includes(op.t)) clearSel();
+  save();
+}
+// Show an edit in progress without keeping it.
+function preview(op) {
+  const s = cloneState(M.committed);
+  applyOp(s, op);
+  show(s);
+}
+
+function makeDisp(p, sig) {
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(p.pos.slice(), 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(p.pos.length), 3));
+  if (p.uv) geo.setAttribute('uv', new THREE.BufferAttribute(p.uv, 2));
+  if (p.col) geo.setAttribute('color', new THREE.BufferAttribute(p.col, 3));
+  const live = liveFaces(p);
+  const index = live ? live.flatMap((f) => [p.idx[f * 3], p.idx[f * 3 + 1], p.idx[f * 3 + 2]]) : p.idx;
+  geo.setIndex(index);
+  const meta = M.data.meta || {};
+  const tintable = (meta.tint || []).includes(p.name);
+  const glow = M.f.glow && !p.add ? M.f.glow : null;
+  const texMat = (meta.unlit || []).includes(p.name)
+    ? new THREE.MeshBasicMaterial({ map: M.page.tex })
+    : new THREE.MeshLambertMaterial({ map: M.page.tex, vertexColors: !!p.col, emissiveMap: tintable ? M.page.tex : glow, emissive: tintable || glow ? 0xffffff : 0x000000, emissiveIntensity: tintable ? 0.3 : 1, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
+  const meshes = [], wires = [];
+  (p.at || [p.joint]).forEach((j, k) => {
+    const parent = j && M.rig.nodes[j] ? M.rig.nodes[j] : M.rig.root;
+    const m = new THREE.Mesh(geo, texMat);
+    m.userData = { part: p.name, k, joint: j, solid: true, add: p.add };
+    const w = new THREE.Mesh(geo, wireSil);
+    w.renderOrder = 3;
+    if (k > 0) { m.scale.x = -1; w.scale.x = -1; }
+    parent.add(m, w);
+    meshes.push(m); wires.push(w);
+  });
+  return { geo, texMat, meshes, wires, live, sig, tintable, name: p.name, part: p };
+}
+function dropDisp(d) {
+  for (const m of [...d.meshes, ...d.wires]) m.parent && m.parent.remove(m);
+  d.geo.dispose(); d.texMat.dispose();
+}
+
+function show(st) {
+  M.shown = st;
+  for (const [n, j] of Object.entries(st.joints)) if (M.rig.nodes[n] && !M.posed) M.rig.nodes[n].position.fromArray(j.pos);
+  const seen = new Set();
+  for (const p of st.parts) {
+    seen.add(p.name);
+    let d = M.disp.get(p.name);
+    const sig = `${p.pos.length}|${p.idx.length}|${p.dead ? p.dead.size : 0}|${(p.at || [p.joint]).join(',')}`;
+    if (!d || d.sig !== sig || d.part.uv !== p.uv || d.part.col !== p.col) { if (d) dropDisp(d); d = makeDisp(p, sig); M.disp.set(p.name, d); }
+    else d.geo.attributes.position.array.set(p.pos);
+    d.part = p;
+    d.geo.attributes.position.needsUpdate = true;
+    vertexNormals(p.pos, p.idx, d.geo.attributes.normal.array, p.dead);
+    d.geo.attributes.normal.needsUpdate = true;
+    d.geo.computeBoundingSphere();
+    d.geo.computeBoundingBox();
+    const hide = hidden(p.name);
+    for (const m of d.meshes) m.visible = !hide;
+    const t = lab().tints[p.name];
+    const c = new THREE.Color(1, 1, 1);
+    if (d.tintable) c.set(PLAYER[ui.slot]);
+    if (t) c.set(t.c || '#ffffff').multiplyScalar(t.b ?? 1);
+    d.texMat.color.copy(c);
+    if (d.tintable) d.texMat.emissive.copy(c);
+  }
+  for (const [name, d] of M.disp) if (!seen.has(name)) { dropDisp(d); M.disp.delete(name); }
+  M.rig.root.updateMatrixWorld(true);
+  refreshMarkers();
+  renderSummary();
+}
+
+// Tips: the far end of each leaf joint's parts, so hands, feet, heads and tails can be posed.
+function tipsOf(st) {
+  const kids = childrenOf(st.joints);
+  const tips = {};
+  for (const j of Object.keys(st.joints)) {
+    if ((kids[j] || []).length) continue;
+    let best = null, bd = 0.03;
+    for (const p of st.parts) {
+      if (p.add || (p.at || [p.joint])[0] !== j) continue;
+      for (let v = 0; v < p.pos.length; v += 3) {
+        const d = Math.hypot(p.pos[v], p.pos[v + 1], p.pos[v + 2]);
+        if (d > bd) { bd = d; best = [p.pos[v], p.pos[v + 1], p.pos[v + 2]]; }
+      }
+    }
+    if (best) tips[j] = best;
+  }
+  return tips;
+}
+
+// --- Poses (the game's own animation, see src/client/render/zombies.js and hounds.js) -------------
+function restPose() {
+  if (!M) return;
+  for (const n of Object.values(M.rig.nodes)) n.quaternion.identity();
+  M.posed = false;
+  ui.anim = null;
+  for (const [n, j] of Object.entries(M.shown.joints)) M.rig.nodes[n]?.position.fromArray(j.pos);
+  M.rig.root.updateMatrixWorld(true);
+  $('restBtn').hidden = true;
+  renderPanel();
+}
+function markPosed() { M.posed = true; $('restBtn').hidden = false; }
+function ensureRest() { if (M && M.posed) { restPose(); status('Back to the rest pose for editing'); } }
+
+function rigJ() {
+  const dummy = () => new THREE.Object3D();
+  return new Proxy({}, { get: (_, k) => M.rig.nodes[k] || (M.rig._dummy ||= {})[k] || (M.rig._dummy[k] = dummy()) });
+}
+function poseGhoul(J, t, kind) {
+  const run = kind === 'run', moving = kind === 'walk' || run;
+  const speed = run ? 5 : kind === 'walk' ? 1.2 : 0;
+  const ph = t * speed * (run ? 2.3 : 3.4);
+  const sway = Math.sin(t * 1.3) * 0.05;
+  if (kind === 'rise') {
+    J.shL.rotation.x = -2.7 + Math.sin(t * 7) * 0.35; J.shR.rotation.x = -2.5 + Math.sin(t * 7 + 2) * 0.35;
+    J.elL.rotation.x = -0.4; J.elR.rotation.x = -0.3;
+    J.spine.rotation.x = 0.35 + Math.sin(t * 5) * 0.1; J.spine.rotation.z = Math.sin(t * 4) * 0.2;
+    J.hipL.rotation.x = -0.5; J.knL.rotation.x = 0.9; J.neck.rotation.x = -0.3;
+    return;
+  }
+  if (kind === 'attack') {
+    const u = Math.min(1, (t % 0.9) / 0.4);
+    const swing = u < 0.7 ? -2.5 + u * 0.4 : -2.2 + (u - 0.7) / 0.3 * 1.8;
+    J.shL.rotation.x = swing; J.shR.rotation.x = swing + 0.3; J.shL.rotation.z = 0.2; J.shR.rotation.z = -0.2;
+    J.elL.rotation.x = -0.5; J.elR.rotation.x = -0.4; J.spine.rotation.x = 0.2 + u * 0.35; J.neck.rotation.x = -0.2;
+    return;
+  }
+  const amp = run ? 0.95 : 0.42, s = Math.sin(ph), c = Math.cos(ph);
+  if (moving) {
+    J.hipL.rotation.x = s * amp; J.hipR.rotation.x = -s * amp;
+    J.knL.rotation.x = Math.max(0, -c) * amp * 1.4 + 0.05; J.knR.rotation.x = Math.max(0, c) * amp * 1.4 + 0.05;
+    J.body.position.y = Math.abs(c) * (run ? 0.07 : 0.035) - (run ? 0.05 : 0);
+  }
+  if (run) {
+    J.spine.rotation.x = 0.45; J.shL.rotation.x = -0.35 - s * 0.9; J.shR.rotation.x = -0.35 + s * 0.9;
+    J.elL.rotation.x = -1.3; J.elR.rotation.x = -1.3; J.neck.rotation.x = -0.35;
+  } else {
+    J.spine.rotation.x = 0.16 + sway; J.spine.rotation.z = moving ? s * 0.07 : sway;
+    J.shL.rotation.x = -1.4 + Math.sin(t * 1.7) * 0.08; J.shR.rotation.x = -1.35 + Math.cos(t * 1.9) * 0.08;
+    J.shL.rotation.z = 0.1; J.shR.rotation.z = -0.1; J.elL.rotation.x = -0.15; J.elR.rotation.x = -0.3;
+    J.neck.rotation.set(-0.1 + Math.sin(t * 2.1) * 0.08, Math.sin(t * 0.7) * 0.2, 0.1);
+  }
+}
+function cycle(p, duty) {
+  p -= Math.floor(p);
+  if (p < duty) return [-1 + 2 * (p / duty), 0];
+  const u = (p - duty) / (1 - duty);
+  return [1 - 2 * (0.5 - 0.5 * Math.cos(Math.PI * u)), Math.sin(Math.PI * u)];
+}
+function poseHound(J, t, kind) {
+  const front = (sh, e, sw, lift, amp) => { sh.rotation.x = 0.12 + sw * amp; e.rotation.x = -0.12 + lift * 1.7 - Math.max(0, -sw) * 0.25 * amp; };
+  const back = (hip, st, hk, sw, lift, amp) => { hip.rotation.x = -0.35 + sw * amp; st.rotation.x = 0.9 + lift * 0.75 + Math.max(0, sw) * 0.15; hk.rotation.x = -0.55 - lift * 0.95 + Math.max(0, sw) * 0.35; };
+  J.neck.rotation.set(-0.55, 0, 0); J.head.rotation.set(0.55, 0, 0); J.jaw.rotation.set(0.04, 0, 0);
+  front(J.shL, J.elL, 0, 0, 0); front(J.shR, J.elR, 0, 0, 0);
+  back(J.hipL, J.stL, J.hkL, 0, 0, 0); back(J.hipR, J.stR, J.hkR, 0, 0, 0);
+  J.tail.rotation.set(-0.15, 0, 0);
+  if (kind === 'pounce') {
+    const u = (t % 1.1) / 1.1;
+    if (u < 0.25) {
+      const c = smoothstep(0, 0.25, u);
+      J.body.position.y = -0.1 * c; J.body.rotation.x = 0.06 * c;
+      front(J.shL, J.elL, -0.2 * c, 0, 0.6); front(J.shR, J.elR, -0.1 * c, 0, 0.6);
+      back(J.hipL, J.stL, J.hkL, -0.6 * c, 0.4 * c, 0.7); back(J.hipR, J.stR, J.hkR, -0.5 * c, 0.4 * c, 0.7);
+      J.hind.rotation.x = -0.18 * c; J.neck.rotation.x = -0.3 + 0.25 * c; J.head.rotation.x = 0.4; J.jaw.rotation.x = 0.1 + 0.35 * c; J.tail.rotation.x = -0.1;
+    } else if (u < 0.72) {
+      const l = (u - 0.25) / 0.47, e = smoothstep(0, 1, l);
+      J.body.position.y = -0.1 + 0.4 * Math.sin(Math.PI * l); J.body.position.z = 0.5 * e; J.body.rotation.x = -0.32 * Math.sin(Math.PI * l);
+      front(J.shL, J.elL, -1.4 * e, 0, 1); front(J.shR, J.elR, -1.3 * e, 0, 1);
+      J.elL.rotation.x -= 0.3 * e; J.elR.rotation.x -= 0.25 * e;
+      back(J.hipL, J.stL, J.hkL, 1.1 * e, 0, 0.8); back(J.hipR, J.stR, J.hkR, 1.0 * e, 0, 0.8);
+      J.hind.rotation.x = 0.15 * e; J.neck.rotation.x = -0.05 - 0.2 * e; J.head.rotation.x = 0.35 - 0.15 * e;
+      J.jaw.rotation.x = 0.45 + 0.6 * smoothstep(0, 0.6, l); J.tail.rotation.x = 0.35 * e;
+    } else {
+      const s = (u - 0.72) / 0.28, r = smoothstep(0, 1, s);
+      J.body.position.z = 0.5 * (1 - r); J.body.position.y = -0.06 * Math.sin(Math.PI * s); J.body.rotation.x = 0.1 * Math.sin(Math.PI * s);
+      front(J.shL, J.elL, lerp(-1.4, -0.3, r), 0, 1); front(J.shR, J.elR, lerp(-1.3, -0.2, r), 0, 1);
+      back(J.hipL, J.stL, J.hkL, lerp(1.1, 0.2, r), 0, 0.8); back(J.hipR, J.stR, J.hkR, lerp(1.0, 0.1, r), 0, 0.8);
+      J.neck.rotation.x = -0.25 + 0.1 * r; J.neck.rotation.y = Math.sin(s * 42) * 0.16 * (1 - s);
+      J.head.rotation.z = Math.sin(s * 42 + 1) * 0.22 * (1 - s); J.head.rotation.x = 0.25;
+      J.jaw.rotation.x = 1.05 * (1 - smoothstep(0, 0.3, s)) + 0.02; J.tail.rotation.x = 0.2;
+    }
+    return;
+  }
+  if (kind === 'gallop') {
+    const sp = 6, p = t * (1.55 + sp * 0.16), a = Math.min(1, 0.55 + sp * 0.07), duty = 0.3;
+    const hl = cycle(p, duty), hr = cycle(p + 0.9, duty), fr = cycle(p + 0.52, duty), fl = cycle(p + 0.42, duty);
+    front(J.shL, J.elL, fl[0], fl[1], 0.82 * a); front(J.shR, J.elR, fr[0], fr[1], 0.82 * a);
+    back(J.hipL, J.stL, J.hkL, hl[0], hl[1], 0.72 * a); back(J.hipR, J.stR, J.hkR, hr[0], hr[1], 0.72 * a);
+    const gather = -(hl[0] + hr[0]) * 0.5, w = TAU * p;
+    J.hind.rotation.x = -0.26 * gather * a; J.fore.rotation.x = 0.1 * gather * a;
+    J.body.position.y = -0.035 + 0.055 * a * Math.max(0, Math.sin(w + 0.9)); J.body.rotation.x = 0.09 * a * Math.sin(w + 2.3);
+    J.neck.rotation.x = -0.06 + 0.1 * a * Math.sin(w + 0.6); J.head.rotation.x = 0.26 - 0.06 * Math.sin(w + 0.6);
+    J.jaw.rotation.x = 0.2 + 0.12 * Math.max(0, Math.sin(w + 1.2)); J.tail.rotation.x = 0.28 + 0.12 * Math.sin(w + 1.5); J.tail.rotation.y = 0.18 * Math.sin(w * 0.5 + t);
+    return;
+  }
+  if (kind === 'trot') {
+    const sp = 1.6, p = t * (1.1 + sp * 0.55), a = Math.min(1, 0.45 + sp * 0.28), duty = 0.55;
+    const A = cycle(p, duty), B = cycle(p + 0.5, duty), hA = cycle(p + 0.04, duty), hB = cycle(p + 0.54, duty);
+    front(J.shL, J.elL, A[0], A[1], 0.45 * a); back(J.hipR, J.stR, J.hkR, hA[0], hA[1], 0.42 * a);
+    front(J.shR, J.elR, B[0], B[1], 0.45 * a); back(J.hipL, J.stL, J.hkL, hB[0], hB[1], 0.42 * a);
+    const w = TAU * p;
+    J.body.position.y = -0.02 + 0.018 * Math.abs(Math.sin(w)); J.body.rotation.z = 0.025 * Math.sin(w);
+    J.neck.rotation.x = -0.28 + 0.05 * Math.sin(w * 2); J.head.rotation.x = 0.5; J.head.rotation.y = 0.12 * Math.sin(t * 0.9);
+    J.jaw.rotation.x = 0.1 + 0.1 * Math.max(0, Math.sin(t * 2.3)) ** 3; J.tail.rotation.x = -0.05 + 0.05 * Math.sin(w * 2); J.tail.rotation.y = 0.3 * Math.sin(w);
+    return;
+  }
+  const br = Math.sin(t * 3.4);
+  J.body.position.y = -0.04 + 0.006 * br;
+  J.shL.rotation.z = 0.08; J.shR.rotation.z = -0.08; J.hipL.rotation.z = 0.05; J.hipR.rotation.z = -0.05;
+  back(J.hipL, J.stL, J.hkL, -0.12, 0.12, 1); back(J.hipR, J.stR, J.hkR, -0.1, 0.12, 1);
+  J.hind.rotation.x = -0.08; J.neck.rotation.x = -0.18 + 0.03 * br; J.head.rotation.x = 0.55;
+  J.head.rotation.y = 0.2 * Math.sin(t * 0.7) + 0.05 * Math.sin(t * 5.3);
+  const snarl = Math.max(0, Math.sin(t * 1.6)) ** 2;
+  J.jaw.rotation.x = 0.04 + 0.24 * snarl + 0.03 * Math.sin(t * 31) * snarl;
+  J.tail.rotation.x = -0.35 + 0.05 * Math.sin(t * 2); J.tail.rotation.y = 0.12 * Math.sin(t * 1.3);
+}
+function poseSway(J, t) {
+  for (const n of ['spine', 'chest', 'waist']) J[n].rotation.x = 0.06 * Math.sin(t * 1.2);
+  J.neck.rotation.y = 0.25 * Math.sin(t * 0.8);
+  J.head.rotation.y = 0.15 * Math.sin(t * 0.8 + 0.5);
+  J.shL.rotation.x = -0.3 + 0.35 * Math.sin(t * 1.6); J.shR.rotation.x = -0.3 - 0.35 * Math.sin(t * 1.6);
+  J.elL.rotation.x = -0.4; J.elR.rotation.x = -0.4;
+}
+let animT = 0;
+function applyAnim(dt) {
+  animT += dt * ui.animSpeed;
+  for (const n of Object.values(M.rig.nodes)) n.quaternion.identity();
+  for (const [n, j] of Object.entries(M.shown.joints)) M.rig.nodes[n]?.position.fromArray(j.pos);
+  const J = rigJ();
+  const b0 = M.rig.nodes.body ? M.rig.nodes.body.position.clone() : null;
+  if (b0) M.rig.nodes.body.position.set(0, 0, 0); // the game's poses offset the body from its rest place
+  if (M.def.id === 'ghoul') poseGhoul(J, animT, ui.anim);
+  else if (M.def.id === 'hound') poseHound(J, animT, ui.anim);
+  else poseSway(J, animT);
+  if (b0 && M.rig.nodes.body) M.rig.nodes.body.position.add(b0);
+  M.rig.root.updateMatrixWorld(true);
+}
+
+// Swing `node` so the point `from` (world) turns toward `to`.
+const _qa = new THREE.Quaternion(), _qb = new THREE.Quaternion(), _qc = new THREE.Quaternion();
+function aim(node, from, to) {
+  const o = node.getWorldPosition(new THREE.Vector3());
+  const a = from.clone().sub(o), b = to.clone().sub(o);
+  if (a.lengthSq() < 1e-8 || b.lengthSq() < 1e-8) return;
+  const q = _qa.setFromUnitVectors(a.normalize(), b.normalize());
+  const world = node.getWorldQuaternion(_qb);
+  const pw = node.parent.getWorldQuaternion(_qc);
+  node.quaternion.copy(pw.invert().multiply(q.multiply(world)));
+  node.updateMatrixWorld(true);
+}
+
+// --- Views ----------------------------------------------------------------------------------------
+const VIEWDIR = {
+  front: { pos: [0, 0, 1], up: [0, 1, 0] }, back: { pos: [0, 0, -1], up: [0, 1, 0] },
+  left: { pos: [1, 0, 0], up: [0, 1, 0] }, right: { pos: [-1, 0, 0], up: [0, 1, 0] },
+  top: { pos: [0, 1, 0], up: [0, 0, -1] },
+};
+const flat = () => ui.view !== 'orbit';
+const camera = () => (flat() ? ortho : persp);
+const viewAxis = () => (VIEWDIR[ui.view] ? VIEWDIR[ui.view].pos.map((x) => -x || 0) : null);
+
+function setView(v, keepOrbit) {
+  ui.view = v;
+  for (const b of $('views').children) b.setAttribute('aria-pressed', String(b.dataset.v === v));
+  if (!M) return;
+  const c = M.box.getCenter(new THREE.Vector3());
+  const s = M.box.getSize(new THREE.Vector3());
+  const r = Math.max(s.x, s.y, s.z);
+  controls.enabled = v === 'orbit';
+  if (v === 'orbit') {
+    if (!keepOrbit || persp.userData.model !== ui.model) {
+      persp.position.set(c.x + r * 1.5, c.y + r * 0.6, c.z + r * 2.3);
+      controls.target.copy(c);
+      persp.userData.model = ui.model;
+    }
+    controls.update();
+  } else {
+    const d = VIEWDIR[v];
+    ortho.position.set(c.x + d.pos[0] * 10, c.y + d.pos[1] * 10, c.z + d.pos[2] * 10);
+    ortho.up.set(...d.up);
+    ortho.lookAt(c);
+    ortho.zoom = 1;
+    const wide = v === 'top' ? Math.max(s.x, s.z) : v === 'front' || v === 'back' ? s.x : s.z;
+    const tall = v === 'top' ? Math.max(s.x, s.z) : s.y;
+    ortho.userData.tall = tall * 1.2;
+    ortho.userData.wide = wide * 1.15;
+    ortho.userData.center = c.clone();
+    ortho.updateMatrixWorld();
+  }
+  $('viewtag').textContent = v === 'orbit' ? 'Orbit' : `${VIEWS.find((x) => x[0] === v)[1]} projection`;
+  resize();
+  renderHint();
+  refreshMarkers();
+}
+
+function resize() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (!w || !h) return;
+  const low = $('lowres').checked;
+  renderer.setPixelRatio(low ? Math.min(1, 240 / h) : Math.min(2, devicePixelRatio || 1));
+  stage.classList.toggle('lowres', low);
+  renderer.setSize(w, h, false);
+  const a = w / h;
+  persp.aspect = a; persp.updateProjectionMatrix();
+  // Fit the whole model: its height, and its width at this aspect ratio.
+  const hh = Math.max((ortho.userData.tall || 2) / 2, (ortho.userData.wide || 2) / 2 / a);
+  ortho.top = hh; ortho.bottom = -hh; ortho.left = -hh * a; ortho.right = hh * a;
+  ortho.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(canvas);
+
+const upp = () => (ortho.top - ortho.bottom) / ortho.zoom / canvas.clientHeight;
+// World units per CSS pixel at a point.
+function pxWorld(p) {
+  if (flat()) return upp();
+  return (persp.position.distanceTo(p) * 2 * Math.tan((persp.fov * Math.PI) / 360)) / canvas.clientHeight;
+}
+function ndc(ev) {
+  const r = canvas.getBoundingClientRect();
+  return new THREE.Vector2(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
+}
+function toScreen(v) {
+  const p = v.clone().project(camera());
+  return { x: (p.x * 0.5 + 0.5) * canvas.clientWidth, y: (-p.y * 0.5 + 0.5) * canvas.clientHeight, z: p.z };
+}
+function local(ev) { const r = canvas.getBoundingClientRect(); return { x: ev.clientX - r.left, y: ev.clientY - r.top }; }
+function screenToWorld(ev) {
+  const m = ndc(ev);
+  const p = new THREE.Vector3(m.x, m.y, 0).unproject(ortho);
+  const a = new THREE.Vector3(...viewAxis());
+  const c = ortho.userData.center || new THREE.Vector3();
+  return p.sub(a.clone().multiplyScalar(p.clone().sub(c).dot(a)));
+}
+const ray = new THREE.Raycaster();
+function rayPlane(ev, point) {
+  ray.setFromCamera(ndc(ev), camera());
+  const n = camera().getWorldDirection(new THREE.Vector3()).negate();
+  return ray.ray.intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(n, point), new THREE.Vector3());
+}
+function pick(ev, keep = () => true) {
+  if (!M) return null;
+  ray.setFromCamera(ndc(ev), camera());
+  const hits = ray.intersectObject(M.rig.root, true);
+  for (const h of hits) if (h.object.userData.solid && h.object.visible && keep(h)) return h;
+  return null;
+}
+const faceOf = (h) => { const d = M.disp.get(h.object.userData.part); return d && d.live ? d.live[h.faceIndex] : h.faceIndex; };
+const worldNormal = (h) => h.face.normal.clone().transformDirection(h.object.matrixWorld);
+const camAxes = () => { const c = camera(); return [new THREE.Vector3().setFromMatrixColumn(c.matrixWorld, 0), new THREE.Vector3().setFromMatrixColumn(c.matrixWorld, 1)]; };
+// A world drag delta limited by the Direction setting (screen horizontal / vertical).
+function locked(dw) {
+  if (ui.lock === 'free') return dw;
+  const [right, up] = camAxes();
+  return ui.lock === 'horiz' ? right.multiplyScalar(dw.dot(right)) : up.multiplyScalar(dw.dot(up));
+}
+const mirrorOn = () => $('mirror').checked;
+
+// --- Welds, vertex and triangle picking --------------------------------------------------------------
+function weldsOf(p) {
+  let w = M.welds.get(p);
+  if (w && w.n === p.pos.length) return w;
+  const key = new Map(), group = new Int32Array(p.pos.length / 3), members = [];
+  for (let v = 0; v < group.length; v++) {
+    const k = `${Math.round(p.pos[v * 3] * 1e5)},${Math.round(p.pos[v * 3 + 1] * 1e5)},${Math.round(p.pos[v * 3 + 2] * 1e5)}`;
+    let g = key.get(k);
+    if (g === undefined) { g = members.length; key.set(k, g); members.push([]); }
+    group[v] = g; members[g].push(v);
+  }
+  // Only corners live triangles use.
+  const used = new Uint8Array(members.length);
+  for (let f = 0; f < p.idx.length / 3; f++) if (!(p.dead && p.dead.has(f))) for (let k = 0; k < 3; k++) used[group[p.idx[f * 3 + k]]] = 1;
+  w = { n: p.pos.length, group, members, used };
+  M.welds.set(p, w);
+  return w;
+}
+// Every visible corner in world space: [{ part, g, k, w (Vector3) }].
+function corners() {
+  const out = [];
+  for (const d of M.disp.values()) {
+    if (!d.meshes[0].visible) continue;
+    const W = weldsOf(M.committed.parts.find((p) => p.name === d.name) || d.part);
+    const pos = d.part.pos;
+    d.meshes.forEach((m, k) => {
+      W.members.forEach((mem, g) => {
+        if (!W.used[g]) return;
+        const v = mem[0];
+        out.push({ part: d.name, g, k, w: new THREE.Vector3(pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2]).applyMatrix4(m.matrixWorld) });
+      });
+    });
+  }
+  return out;
+}
+function nearestCorner(ev, px = 11) {
+  const q = local(ev);
+  let best = null, bd = px;
+  for (const c of corners()) {
+    const s = toScreen(c.w);
+    const d = Math.hypot(s.x - q.x, s.y - q.y);
+    if (d < bd - 0.5 || (best && Math.abs(d - bd) <= 0.5 && s.z < best.s.z)) { bd = d; best = { ...c, s }; }
+  }
+  return best;
+}
+function clearSel() { sel.verts.clear(); sel.faces.clear(); }
+function selCount(map) { let n = 0; for (const s of map.values()) n += s.size; return n; }
+function toggle(map, part, id, add) {
+  if (!add) map.clear();
+  let s = map.get(part);
+  if (!s) map.set(part, (s = new Set()));
+  if (add && s.has(id)) s.delete(id); else s.add(id);
+}
+// Mirror twins by position: a corner at (-x, y, z), a triangle whose centre mirrors.
+function mirrorCorner(part, g) {
+  const p = M.committed.parts.find((q) => q.name === part);
+  const W = weldsOf(p), v = W.members[g][0];
+  const d = M.disp.get(part);
+  const w = new THREE.Vector3(p.pos[v * 3], p.pos[v * 3 + 1], p.pos[v * 3 + 2]).applyMatrix4(d.meshes[0].matrixWorld);
+  if (Math.abs(w.x) < 0.002) return { centre: true };
+  const target = new THREE.Vector3(-w.x, w.y, w.z);
+  for (const name of new Set([mirrorName(part), part])) {
+    const q = M.committed.parts.find((x) => x.name === name);
+    const dd = M.disp.get(name);
+    if (!q || !dd) continue;
+    const Q = weldsOf(q), mw = dd.meshes[0].matrixWorld;
+    for (let gi = 0; gi < Q.members.length; gi++) {
+      if (!Q.used[gi]) continue;
+      const u = Q.members[gi][0];
+      const x = new THREE.Vector3(q.pos[u * 3], q.pos[u * 3 + 1], q.pos[u * 3 + 2]).applyMatrix4(mw);
+      if (x.distanceToSquared(target) < 9e-6) return { part: name, g: gi };
+    }
+  }
+  return null;
+}
+function faceCentre(part, f, st = M.committed) {
+  const p = st.parts.find((q) => q.name === part);
+  const d = M.disp.get(part);
+  if (!p || !d) return null;
+  const c = new THREE.Vector3();
+  for (let k = 0; k < 3; k++) { const v = p.idx[f * 3 + k]; c.add(new THREE.Vector3(p.pos[v * 3], p.pos[v * 3 + 1], p.pos[v * 3 + 2])); }
+  return c.multiplyScalar(1 / 3).applyMatrix4(d.meshes[0].matrixWorld);
+}
+function mirrorFace(part, f) {
+  const c = faceCentre(part, f);
+  if (!c || Math.abs(c.x) < 0.002) return null;
+  const target = new THREE.Vector3(-c.x, c.y, c.z);
+  for (const name of new Set([mirrorName(part), part])) {
+    const q = M.committed.parts.find((x) => x.name === name);
+    if (!q) continue;
+    for (let g = 0; g < q.idx.length / 3; g++) {
+      if (q.dead && q.dead.has(g)) continue;
+      const cc = faceCentre(name, g);
+      if (cc && cc.distanceToSquared(target) < 9e-6) return { part: name, f: g };
+    }
+  }
+  return null;
+}
+
+// Vertex dots and selected triangles, drawn over the model in the main view.
+function refreshMarkers() {
+  while (markers.children.length) { const m = markers.children.pop(); m.geometry.dispose(); }
+  if (!M || M.posed) return;
+  if (ui.mode === 'mesh' && ui.tool === 'vsel') {
+    const all = [], chosen = [];
+    for (const c of corners()) {
+      all.push(c.w.x, c.w.y, c.w.z);
+      if (sel.verts.get(c.part)?.has(c.g)) chosen.push(c.w.x, c.w.y, c.w.z);
+    }
+    const g1 = new THREE.BufferGeometry(); g1.setAttribute('position', new THREE.Float32BufferAttribute(all, 3));
+    const p1 = new THREE.Points(g1, ptsMat); p1.renderOrder = 5; markers.add(p1);
+    if (chosen.length) { const g2 = new THREE.BufferGeometry(); g2.setAttribute('position', new THREE.Float32BufferAttribute(chosen, 3)); const p2 = new THREE.Points(g2, ptsSelMat); p2.renderOrder = 6; markers.add(p2); }
+  }
+  if (ui.mode === 'mesh' && selCount(sel.faces)) {
+    const tri = [];
+    for (const [part, fs] of sel.faces) {
+      const p = M.shown.parts.find((q) => q.name === part), d = M.disp.get(part);
+      if (!p || !d) continue;
+      for (const f of fs) for (let k = 0; k < 3; k++) {
+        const v = p.idx[f * 3 + k];
+        const w = new THREE.Vector3(p.pos[v * 3], p.pos[v * 3 + 1], p.pos[v * 3 + 2]).applyMatrix4(d.meshes[0].matrixWorld);
+        tri.push(w.x, w.y, w.z);
+      }
+    }
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(tri, 3));
+    const m = new THREE.Mesh(g, faceSelMat); m.renderOrder = 6; markers.add(m);
+  }
+}
+
+// --- Tools: each returns a drag handler from down(), or handles a click --------------------------------
+let pending = null;
+const T = {};
+function brushDown(ev, kind) {
+  ensureRest();
+  const h = pick(ev);
+  const part = ui.only && h ? h.object.userData.part : null;
+  if (flat()) {
+    const c = screenToWorld(ev).toArray().map(r4);
+    const start = { x: ev.clientX, y: ev.clientY };
+    const cs = [c];
+    return {
+      move(e) {
+        const dx = e.clientX - start.x, dy = e.clientY - start.y;
+        const [right, up] = camAxes();
+        const lx = ui.lock === 'vert' ? 0 : dx, ly = ui.lock === 'horiz' ? 0 : dy;
+        if (kind === 'move') {
+          const d = right.multiplyScalar(lx * upp()).add(up.multiplyScalar(-ly * upp())).multiplyScalar(ui.strength);
+          pending = { t: 'move', c, r: r4(ui.radius), d: d.toArray().map(r4), axis: viewAxis(), mirror: mirrorOn() };
+        } else if (kind === 'inflate') {
+          pending = { t: 'inflate', c, r: r4(ui.radius), amt: r4(-dy * upp() * 0.35 * ui.strength), axis: viewAxis(), mirror: mirrorOn() };
+        } else {
+          const w = screenToWorld(e).toArray().map(r4);
+          const last = cs[cs.length - 1];
+          if (Math.hypot(w[0] - last[0], w[1] - last[1], w[2] - last[2]) > ui.radius * 0.35) cs.push(w);
+          pending = { t: 'smooth', cs: cs.slice(), r: r4(ui.radius), amt: r4(0.5 * ui.strength), axis: viewAxis(), mirror: mirrorOn() };
+        }
+        if (part) pending.part = part;
+        preview(pending);
+      },
+      up: commitPending,
+    };
+  }
+  if (!h) return null;
+  const c = h.point.clone();
+  const start = { x: ev.clientX, y: ev.clientY };
+  const cs = [c.toArray().map(r4)];
+  return {
+    move(e) {
+      if (kind === 'move') {
+        const t = rayPlane(e, c);
+        if (!t) return;
+        const d = locked(t.sub(c)).multiplyScalar(ui.strength);
+        pending = { t: 'move', c: c.toArray().map(r4), r: r4(ui.radius), d: d.toArray().map(r4), axis: null, mirror: mirrorOn() };
+      } else if (kind === 'inflate') {
+        pending = { t: 'inflate', c: c.toArray().map(r4), r: r4(ui.radius), amt: r4(-(e.clientY - start.y) * pxWorld(c) * 0.35 * ui.strength), axis: null, mirror: mirrorOn() };
+      } else {
+        const hh = pick(e);
+        if (hh) {
+          const w = hh.point.toArray().map(r4), last = cs[cs.length - 1];
+          if (Math.hypot(w[0] - last[0], w[1] - last[1], w[2] - last[2]) > ui.radius * 0.35) cs.push(w);
+        }
+        pending = { t: 'smooth', cs: cs.slice(), r: r4(ui.radius), amt: r4(0.5 * ui.strength), axis: null, mirror: mirrorOn() };
+      }
+      if (part) pending.part = part;
+      preview(pending);
+    },
+    up: commitPending,
+  };
+}
+function commitPending() {
+  const p = pending;
+  pending = null;
+  if (!p) return;
+  const tiny = p.t === 'move' ? Math.hypot(...p.d) < 1e-4
+    : p.t === 'inflate' ? Math.abs(p.amt) < 1e-4
+    : p.t === 'stretch' ? p.s.every((v) => Math.abs(v - 1) < 1e-3)
+    : p.t === 'joint' ? Math.hypot(...p.d) < 1e-4
+    : p.t === 'verts' ? p.sets.every((s) => Math.hypot(...s.d) < 1e-5)
+    : p.t === 'poke' ? Math.abs(p.h) < 1e-4 : false;
+  if (tiny) { show(M.committed); return; }
+  commitOp(p);
+}
+T.move = { down: (ev) => brushDown(ev, 'move') };
+T.inflate = { down: (ev) => brushDown(ev, 'inflate') };
+T.smooth = { down: (ev) => brushDown(ev, 'smooth') };
+let wheelMerge = { t: 0, part: null };
+T.size = {
+  down(ev) {
+    ensureRest();
+    const h = pick(ev);
+    if (!h) return null;
+    ui.selPart = h.object.userData.part;
+    renderOpts();
+    const start = { x: ev.clientX, y: ev.clientY }, part = ui.selPart;
+    return {
+      move(e) {
+        const dx = e.clientX - start.x, dy = e.clientY - start.y;
+        const lx = ui.lock === 'vert' ? 0 : dx, ly = ui.lock === 'horiz' ? 0 : dy;
+        const [right, up] = camAxes();
+        const major = (v) => { const a = v.toArray().map(Math.abs); return a.indexOf(Math.max(...a)); };
+        const s = [1, 1, 1];
+        s[major(right)] *= Math.max(0.2, 1 + lx / 240);
+        s[major(up)] *= Math.max(0.2, 1 - ly / 240);
+        pending = { t: 'stretch', part, s: s.map(r4), mirror: mirrorOn() };
+        preview(pending);
+      },
+      up: commitPending,
+    };
+  },
+  wheel(ev) {
+    const h = pick(ev);
+    if (!h) return false;
+    ensureRest();
+    const part = h.object.userData.part;
+    const k = Math.exp(-Math.sign(ev.deltaY) * 0.05);
+    const L = lab(), last = L.ops[L.ops.length - 1];
+    ui.selPart = part;
+    if (last && last.t === 'stretch' && last.part === part && wheelMerge.part === part && performance.now() - wheelMerge.t < 700 && last.s[0] === last.s[1]) {
+      last.s = last.s.map((v) => r4(v * k));
+      commitAll(); save();
+    } else commitOp({ t: 'stretch', part, s: [r4(k), r4(k), r4(k)], mirror: mirrorOn() });
+    wheelMerge = { t: performance.now(), part };
+    renderOpts();
+    return true;
+  },
+};
+
+// Rig: drag joint balls (and the square tips of end joints).
+function jointAt(ev, px = 13) {
+  const q = local(ev);
+  let best = null, bd = px;
+  for (const h of rigHandles()) { const d = Math.hypot(h.s.x - q.x, h.s.y - q.y); if (d < bd) { bd = d; best = h; } }
+  return best;
+}
+function rigHandles() {
+  if (!M) return [];
+  const out = [];
+  for (const [n, node] of Object.entries(M.rig.nodes)) {
+    const w = node.getWorldPosition(new THREE.Vector3());
+    out.push({ kind: 'joint', j: n, w, s: toScreen(w) });
+    if (M.tips[n]) { const t = node.localToWorld(new THREE.Vector3(...M.tips[n])); out.push({ kind: 'tip', j: n, w: t, s: toScreen(t) }); }
+  }
+  return out;
+}
+T.pose = {
+  down(ev) {
+    const h = jointAt(ev);
+    if (!h) return null;
+    ui.anim = null;
+    ui.selJoint = h.j;
+    renderPanel();
+    const J = M.shown.joints[h.j];
+    const node = h.kind === 'tip' ? M.rig.nodes[h.j] : J && J.parent ? M.rig.nodes[J.parent] : null;
+    if (!node) { status('That is the root joint; pose a limb instead'); return null; }
+    const tipLocal = h.kind === 'tip' ? new THREE.Vector3(...M.tips[h.j]) : null;
+    return {
+      move(e) {
+        const cur = tipLocal ? M.rig.nodes[h.j].localToWorld(tipLocal.clone()) : M.rig.nodes[h.j].getWorldPosition(new THREE.Vector3());
+        const t = rayPlane(e, cur);
+        if (!t) return;
+        aim(node, cur, t);
+        markPosed();
+      },
+      up() {},
+    };
+  },
+};
+T.joint = {
+  down(ev) {
+    const h = jointAt(ev);
+    if (!h || h.kind !== 'joint') return null;
+    ensureRest();
+    ui.selJoint = h.j;
+    renderPanel();
+    const start = h.w.clone();
+    return {
+      move(e) {
+        const t = rayPlane(e, start);
+        if (!t) return;
+        const d = locked(t.sub(start));
+        pending = { t: 'joint', j: h.j, d: d.toArray().map(r4), mirror: mirrorOn() };
+        preview(pending);
+      },
+      up() { commitPending(); M.tips = tipsOf(M.committed); },
+    };
+  },
+};
+
+// Triangles mode.
+function boxDrag(ev, onDone) {
+  const a = local(ev);
+  const box = $('boxsel');
+  return {
+    move(e) {
+      const b = local(e);
+      Object.assign(box.style, { display: 'block', left: `${Math.min(a.x, b.x)}px`, top: `${Math.min(a.y, b.y)}px`, width: `${Math.abs(b.x - a.x)}px`, height: `${Math.abs(b.y - a.y)}px` });
+    },
+    up(e) {
+      box.style.display = 'none';
+      const b = local(e);
+      if (Math.hypot(b.x - a.x, b.y - a.y) < 4) { if (!e.shiftKey) { clearSel(); refreshMarkers(); renderPanel(); } return; }
+      onDone({ x0: Math.min(a.x, b.x), x1: Math.max(a.x, b.x), y0: Math.min(a.y, b.y), y1: Math.max(a.y, b.y) }, e.shiftKey);
+      refreshMarkers(); renderPanel();
+    },
+  };
+}
+const inBox = (s, r) => s.x >= r.x0 && s.x <= r.x1 && s.y >= r.y0 && s.y <= r.y1;
+T.vsel = {
+  down(ev) {
+    ensureRest();
+    const c = nearestCorner(ev);
+    if (!c) {
+      if (!flat()) return null;
+      return boxDrag(ev, (r, add) => {
+        if (!add) sel.verts.clear();
+        for (const k of corners()) {
+          if (!inBox(toScreen(k.w), r)) continue;
+          let s = sel.verts.get(k.part);
+          if (!s) sel.verts.set(k.part, (s = new Set()));
+          s.add(k.g);
+        }
+      });
+    }
+    const already = sel.verts.get(c.part)?.has(c.g);
+    if (!already) { toggle(sel.verts, c.part, c.g, ev.shiftKey); refreshMarkers(); renderPanel(); }
+    else if (ev.shiftKey) { sel.verts.get(c.part).delete(c.g); refreshMarkers(); renderPanel(); return null; }
+    // Drag the selection. Mirror twins (and centre-line corners) are worked out now.
+    const flip = c.k > 0 ? -1 : 1;
+    const plan = [];
+    const taken = new Set();
+    for (const [part, gs] of sel.verts) for (const g of gs) taken.add(`${part}:${g}`);
+    for (const [part, gs] of sel.verts) for (const g of gs) {
+      let centre = false;
+      if (mirrorOn()) {
+        const m = mirrorCorner(part, g);
+        if (m && m.centre) centre = true;
+        else if (m && !taken.has(`${m.part}:${m.g}`)) { plan.push({ part: m.part, g: m.g, mirror: true }); taken.add(`${m.part}:${m.g}`); }
+      }
+      plan.push({ part, g, centre });
+    }
+    return {
+      move(e) {
+        const t = rayPlane(e, c.w);
+        if (!t) return;
+        const dw = locked(t.sub(c.w));
+        const groups = new Map();
+        for (const it of plan) {
+          const d = [dw.x * flip, dw.y, dw.z];
+          if (it.mirror) d[0] = -d[0];
+          if (it.centre) d[0] = 0;
+          const key = `${it.part}|${d.join(',')}`;
+          let s = groups.get(key);
+          if (!s) groups.set(key, (s = { part: it.part, v: [], d: d.map(r4) }));
+          const p = M.committed.parts.find((q) => q.name === it.part);
+          s.v.push(...weldsOf(p).members[it.g]);
+        }
+        pending = { t: 'verts', sets: [...groups.values()] };
+        preview(pending);
+        refreshMarkers();
+      },
+      up() { commitPending(); refreshMarkers(); },
+    };
+  },
+};
+T.fsel = {
+  down(ev) {
+    ensureRest();
+    const h = pick(ev);
+    if (!h) {
+      if (!flat()) return null;
+      return boxDrag(ev, (r, add) => {
+        if (!add) sel.faces.clear();
+        for (const d of M.disp.values()) {
+          if (!d.meshes[0].visible) continue;
+          const p = d.part;
+          for (let f = 0; f < p.idx.length / 3; f++) {
+            if (p.dead && p.dead.has(f)) continue;
+            const c = faceCentre(d.name, f, M.shown);
+            if (c && inBox(toScreen(c), r)) { let s = sel.faces.get(d.name); if (!s) sel.faces.set(d.name, (s = new Set())); s.add(f); }
+          }
+        }
+      });
+    }
+    return { click: true, h };
+  },
+  click(ev, h) {
+    toggle(sel.faces, h.object.userData.part, faceOf(h), ev.shiftKey);
+    refreshMarkers(); renderPanel();
+  },
+};
+function deleteFaces() {
+  if (!selCount(sel.faces)) return false;
+  const lists = new Map();
+  const add = (part, f) => { let s = lists.get(part); if (!s) lists.set(part, (s = new Set())); s.add(f); };
+  for (const [part, fs] of sel.faces) for (const f of fs) {
+    add(part, f);
+    if (mirrorOn()) { const m = mirrorFace(part, f); if (m) add(m.part, m.f); }
+  }
+  commitOp({ t: 'del', list: [...lists].map(([part, fs]) => ({ part, f: [...fs] })) });
+  renderPanel();
+  return true;
+}
+T.poke = {
+  down(ev) {
+    ensureRest();
+    const h = pick(ev);
+    if (!h) return null;
+    const part = h.object.userData.part, f = faceOf(h);
+    const list = [];
+    const seen = new Set();
+    const push = (p, x) => { const k = `${p}:${x}`; if (!seen.has(k)) { seen.add(k); list.push({ part: p, f: x }); } };
+    if (sel.faces.get(part)?.has(f)) { for (const [p, fs] of sel.faces) for (const x of fs) push(p, x); } else push(part, f);
+    if (mirrorOn()) for (const it of list.slice()) { const m = mirrorFace(it.part, it.f); if (m) push(m.part, m.f); }
+    const start = ev.clientY, scale = pxWorld(h.point);
+    return {
+      move(e) { pending = { t: 'poke', list, h: r4(-(e.clientY - start) * scale * ui.strength) }; preview(pending); },
+      up: commitPending,
+    };
+  },
+};
+
+// Parts: snap shapes onto the surface.
+const nextId = () => { const L = lab(); const id = L.nextId || 1; L.nextId = id + 1; return id; };
+const addOp = (id) => lab().ops.find((o) => o.t === 'add' && o.id === id);
+function surfaceHit(ev) { return pick(ev, (h) => !h.object.userData.add); }
+T.place = {
+  down(ev) {
+    ensureRest();
+    const h = pick(ev);
+    if (!h) return null;
+    if (h.object.userData.add) {
+      const id = h.object.userData.add;
+      ui.selAdd = id;
+      renderPanel();
+      let moved = false;
+      return {
+        move(e) {
+          const s = surfaceHit(e);
+          if (!s) return;
+          if (!moved) { remember(); moved = true; }
+          const op = addOp(id);
+          op.at = s.point.toArray().map(r4);
+          op.n = worldNormal(s).toArray().map(r4);
+          op.joint = s.object.userData.joint;
+          commitAll();
+        },
+        up() { if (moved) save(); },
+      };
+    }
+    return { click: true, h };
+  },
+  click(ev, h) {
+    if (h.object.userData.add) return;
+    const id = nextId();
+    const op = {
+      t: 'add', id, kind: ui.kind, joint: h.object.userData.joint, at: h.point.toArray().map(r4), n: worldNormal(h).toArray().map(r4),
+      s: r4(ui.partS), len: r4(ui.partLen), lean: ui.partLean, twist: ui.partTwist, uv: h.uv ? [r4(h.uv.x), r4(h.uv.y)] : [0.5, 0.5], mirror: mirrorOn(),
+    };
+    commitOp(op);
+    ui.selAdd = id;
+    renderPanel();
+  },
+  wheel(ev) {
+    const h = pick(ev);
+    if (!h || !h.object.userData.add) return false;
+    const op = addOp(h.object.userData.add);
+    if (!op) return false;
+    if (performance.now() - wheelMerge.t > 700) remember();
+    wheelMerge = { t: performance.now(), part: op.id };
+    const k = Math.exp(-Math.sign(ev.deltaY) * 0.07);
+    op.s = r4(clamp(op.s * k, 0.005, 0.4)); op.len = r4(clamp(op.len * k, 0.005, 0.8));
+    ui.selAdd = op.id;
+    commitAll(); save(); renderPanel();
+    return true;
+  },
+};
+
+// Paint.
+const tri = new THREE.Triangle(), bary = new THREE.Vector3();
+T.note = {
+  down(ev) { const h = pick(ev); return h ? { click: true, h } : null; },
+  click(ev, h) {
+    const part = h.object.userData.part, k = h.object.userData.k;
+    const d = M.disp.get(part);
+    const [a, b, c] = [h.face.a, h.face.b, h.face.c].map((i) => new THREE.Vector3().fromBufferAttribute(d.geo.attributes.position, i).applyMatrix4(h.object.matrixWorld));
+    tri.set(a, b, c).getBarycoord(h.point, bary);
+    remember();
+    const note = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5), part, k, f: faceOf(h), b: bary.toArray().map(r4), p: h.point.toArray().map(r4), uv: h.uv ? [r4(h.uv.x), r4(h.uv.y)] : null, tag: 'wear', size: 6, text: '' };
+    lab().notes.push(note);
+    ui.selNote = note.id;
+    save();
+    renderPanel(true);
+  },
+};
+T.tint = {
+  down(ev) { const h = pick(ev); return h ? { click: true, h } : null; },
+  click(ev, h) { ui.selPart = h.object.userData.part; renderOpts(); },
+};
+
+// --- Pointer routing ----------------------------------------------------------------------------------
+// Handlers run in the capture phase so a tool that takes a press keeps it from the orbit camera.
+let drag = null, spaceHeld = false;
+const touches = new Map();
+function pinchState() {
+  const [a, b] = [...touches.values()];
+  return { mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, dist: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)) };
+}
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+stage.addEventListener('pointerdown', (ev) => {
+  if (!M || ev.target.closest('button, .pin')) return;
+  if (ev.pointerType === 'touch') {
+    touches.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    if (touches.size === 2) {
+      if (pending) { pending = null; show(M.committed); }
+      if (flat()) {
+        drag = { pinch: true, ...pinchState(), zoom: ortho.zoom, pos: ortho.position.clone() };
+        ev.stopPropagation();
+      } else drag = null;
+      return;
+    }
+    if (touches.size > 1) return;
+  }
+  if (flat() && (ev.button === 1 || ev.button === 2 || spaceHeld)) {
+    stage.setPointerCapture(ev.pointerId);
+    drag = { pan: true, x: ev.clientX, y: ev.clientY, pos: ortho.position.clone() };
+    ev.stopPropagation();
+    return;
+  }
+  if (ev.button !== 0) return;
+  const tool = T[ui.tool];
+  const r = tool && tool.down ? tool.down(ev) : null;
+  if (!r) { drag = null; return; }
+  if (r.click) { drag = { click: true, x: ev.clientX, y: ev.clientY, h: r.h }; return; } // let the orbit camera have drags
+  drag = { ...r, x: ev.clientX, y: ev.clientY };
+  stage.setPointerCapture(ev.pointerId);
+  ev.stopPropagation();
+}, true);
+stage.addEventListener('pointermove', (ev) => {
+  if (touches.has(ev.pointerId)) touches.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+  if (!M) return;
+  if (!drag) { hover(ev); return; }
+  if (drag.pinch) {
+    if (touches.size < 2) return;
+    const now = pinchState();
+    const [right, up] = camAxes();
+    ortho.zoom = clamp(drag.zoom * (now.dist / drag.dist), 0.4, 14);
+    ortho.updateProjectionMatrix();
+    ortho.position.copy(drag.pos).addScaledVector(right, -(now.mx - drag.mx) * upp()).addScaledVector(up, (now.my - drag.my) * upp());
+    ortho.updateMatrixWorld();
+    return;
+  }
+  if (drag.pan) {
+    const [right, up] = camAxes();
+    ortho.position.copy(drag.pos).addScaledVector(right, -(ev.clientX - drag.x) * upp()).addScaledVector(up, (ev.clientY - drag.y) * upp());
+    ortho.updateMatrixWorld();
+    return;
+  }
+  if (drag.click) return;
+  drag.move(ev);
+  brushRing(ev);
+}, true);
+function endPointer(ev, cancel) {
+  touches.delete(ev.pointerId);
+  const d = drag;
+  if (!d) return;
+  if (d.pinch) { if (!touches.size) drag = null; return; }
+  drag = null;
+  if (cancel) { if (pending) { pending = null; show(M.committed); } return; }
+  if (d.click) { if (Math.hypot(ev.clientX - d.x, ev.clientY - d.y) < 6) T[ui.tool].click(ev, d.h); return; }
+  if (d.up) d.up(ev);
+}
+stage.addEventListener('pointerup', (ev) => endPointer(ev, false), true);
+stage.addEventListener('pointercancel', (ev) => endPointer(ev, true), true);
+stage.addEventListener('pointerleave', () => { if (!drag) { $('brush').style.display = 'none'; $('hover').style.display = 'none'; } });
+stage.addEventListener('wheel', (ev) => {
+  if (!M || ev.target.closest('button')) return;
+  const tool = T[ui.tool];
+  if (tool && tool.wheel && tool.wheel(ev)) { ev.preventDefault(); ev.stopPropagation(); return; }
+  if (!flat()) return; // the orbit camera zooms
+  ev.preventDefault();
+  ev.stopPropagation();
+  const m = ndc(ev);
+  const before = new THREE.Vector3(m.x, m.y, 0).unproject(ortho);
+  ortho.zoom = clamp(ortho.zoom * Math.exp(-ev.deltaY * 0.0015), 0.4, 14);
+  ortho.updateProjectionMatrix();
+  const after = new THREE.Vector3(m.x, m.y, 0).unproject(ortho);
+  ortho.position.add(before.sub(after));
+  ortho.updateMatrixWorld();
+  brushRing(ev);
+}, { capture: true, passive: false });
+$('fit').addEventListener('click', () => setView(ui.view));
+$('restBtn').addEventListener('click', () => restPose());
+
+// The brush ring: flat views at the cursor; Orbit on the surface under it.
+function brushRing(ev) {
+  const b = $('brush');
+  const brushy = ['move', 'inflate', 'smooth'].includes(ui.tool);
+  if (!brushy || (drag && (drag.pan || drag.pinch))) { b.style.display = 'none'; return; }
+  const q = local(ev);
+  let px;
+  if (flat()) px = (ui.radius / upp()) * 2;
+  else {
+    const h = pick(ev);
+    if (!h) { b.style.display = 'none'; return; }
+    px = (ui.radius / pxWorld(h.point)) * 2;
+  }
+  const at = drag && ui.tool !== 'smooth' ? { x: drag.x - canvas.getBoundingClientRect().left, y: drag.y - canvas.getBoundingClientRect().top } : q;
+  b.style.cssText = `display:block;left:${at.x}px;top:${at.y}px;width:${px}px;height:${px}px`;
+}
+// Name what is under the cursor: a joint in Rig mode, otherwise the part and its triangle count.
+function hover(ev) {
+  brushRing(ev);
+  const box = $('hover');
+  const q = local(ev);
+  let text = '';
+  if (ui.mode === 'rig' || $('bones').checked) { const h = jointAt(ev); if (h) text = h.kind === 'tip' ? `${h.j} (tip)` : h.j; }
+  if (!text && ui.mode !== 'rig') {
+    const h = pick(ev);
+    if (h) {
+      const d = M.disp.get(h.object.userData.part);
+      const n = d ? d.geo.index.count / 3 : 0;
+      text = `${h.object.userData.add ? `${h.object.userData.part} (added)` : h.object.userData.part} · ${n} triangles`;
+    }
+  }
+  if (!text) { box.style.display = 'none'; return; }
+  box.textContent = text;
+  box.style.cssText = `display:block;left:${q.x}px;top:${q.y}px`;
+}
+
+// --- Pins: each note rides its triangle, so it follows the shape edits --------------------------------
+const pinEls = new Map();
+const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3(), _n = new THREE.Vector3(), _p = new THREE.Vector3(), _t = new THREE.Vector3();
+function notePlace(n) {
+  const d = M && M.disp.get(n.part);
+  const m = d && d.meshes[n.k || 0];
+  const p = d && d.part;
+  if (!m || !m.visible || n.f == null || n.f * 3 + 2 >= p.idx.length || (p.dead && p.dead.has(n.f))) return null;
+  const at = (v, out) => out.set(p.pos[v * 3], p.pos[v * 3 + 1], p.pos[v * 3 + 2]).applyMatrix4(m.matrixWorld);
+  at(p.idx[n.f * 3], _a); at(p.idx[n.f * 3 + 1], _b); at(p.idx[n.f * 3 + 2], _c);
+  _p.set(0, 0, 0).addScaledVector(_a, n.b[0]).addScaledVector(_b, n.b[1]).addScaledVector(_c, n.b[2]);
+  _n.subVectors(_c, _b).cross(_t.subVectors(_a, _b)).normalize();
+  if (m.matrixWorld.determinant() < 0) _n.negate();
+  return { p: _p, n: _n };
+}
+function drawPins() {
+  const notes = $('pinsOn').checked && M ? lab().notes : [];
+  const seen = new Set();
+  const cam = camera();
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  const va = viewAxis();
+  notes.forEach((n, i) => {
+    const at = notePlace(n);
+    if (!at) return;
+    seen.add(n.id);
+    let e = pinEls.get(n.id);
+    if (!e) {
+      e = el('button', { class: 'pin', type: 'button', onclick: () => { ui.selNote = n.id; if (ui.mode !== 'paint') setMode('paint'); renderPanel(true); } });
+      $('overlay').append(e);
+      pinEls.set(n.id, e);
+    }
+    const facing = va ? -(at.n.x * va[0] + at.n.y * va[1] + at.n.z * va[2]) : at.n.dot(_t.copy(cam.position).sub(at.p).normalize());
+    const q = at.p.clone().project(cam);
+    const size = clamp(((n.size || 6) / 100) / pxWorld(at.p), 18, 56);
+    e.textContent = String(i + 1);
+    e.setAttribute('aria-label', `Note ${i + 1}: ${(TAGS[n.tag] || TAGS.other)[0]}`);
+    e.classList.toggle('back', facing < -0.05);
+    e.classList.toggle('sel', ui.selNote === n.id);
+    e.style.cssText = `left:${(q.x * 0.5 + 0.5) * w}px;top:${(-q.y * 0.5 + 0.5) * h}px;width:${size}px;height:${size}px;background:${(TAGS[n.tag] || TAGS.other)[1]}d0`;
+  });
+  for (const [id, e] of pinEls) if (!seen.has(id)) { e.remove(); pinEls.delete(id); }
+}
+
+// --- Bones overlay -------------------------------------------------------------------------------------
+const rigSvg = $('rig');
+function drawRig() {
+  const on = M && (ui.mode === 'rig' || $('bones').checked);
+  if (!on) { if (rigSvg.firstChild) rigSvg.replaceChildren(); return; }
+  const H = rigHandles();
+  const at = Object.fromEntries(H.filter((h) => h.kind === 'joint').map((h) => [h.j, h.s]));
+  const kids = [];
+  for (const [n, j] of Object.entries(M.shown.joints)) {
+    if (j.parent && at[j.parent] && at[n]) kids.push(svgEl('line', { x1: at[j.parent].x, y1: at[j.parent].y, x2: at[n].x, y2: at[n].y, stroke: '#16130f', 'stroke-width': 5, 'stroke-linecap': 'round', opacity: 0.55 }),
+      svgEl('line', { x1: at[j.parent].x, y1: at[j.parent].y, x2: at[n].x, y2: at[n].y, stroke: '#ffcf6a', 'stroke-width': 2, 'stroke-linecap': 'round' }));
+  }
+  for (const h of H) {
+    const side = /L$/.test(h.j) ? '#ff6a4d' : /R$/.test(h.j) ? '#6aa9ff' : '#f2efe6';
+    const selected = ui.selJoint === h.j;
+    if (h.kind === 'tip') {
+      const j = at[h.j];
+      if (j) kids.push(svgEl('line', { x1: j.x, y1: j.y, x2: h.s.x, y2: h.s.y, stroke: '#ffcf6a', 'stroke-width': 1.2, 'stroke-dasharray': '3 3' }));
+      kids.push(svgEl('rect', { x: h.s.x - 4.5, y: h.s.y - 4.5, width: 9, height: 9, fill: side, stroke: '#16130f', 'stroke-width': 1.5 }));
+    } else kids.push(svgEl('circle', { cx: h.s.x, cy: h.s.y, r: selected ? 8 : 6, fill: selected ? '#ffcf6a' : side, stroke: '#16130f', 'stroke-width': 1.5 }));
+  }
+  rigSvg.replaceChildren(...kids);
+}
+
+// --- Frame ---------------------------------------------------------------------------------------------
+function highlightOf(d) {
+  if (ui.tool === 'size' || ui.tool === 'tint') return ui.selPart === d.name;
+  if (ui.mode === 'parts') return d.part.add != null && d.part.add === ui.selAdd;
+  if (ui.mode === 'rig' && ui.selJoint) return (d.part.at || [d.part.joint]).includes(ui.selJoint);
+  return false;
+}
+function paint(sil, main) {
+  scene.background = sil ? PAPER : DARK;
+  M.ghost.visible = main && $('ghost').checked && flat() && !M.posed;
+  ghostMat.color.copy(sil ? GHOST_SIL : GHOST_TEX);
+  const wire = $('wire').checked || ui.mode === 'mesh';
+  for (const d of M.disp.values()) {
+    const hi = highlightOf(d);
+    for (const m of d.meshes) { m.material = sil ? (hi ? selMat : silMat) : d.texMat; m.renderOrder = hi ? 2 : 1; }
+    d.wires.forEach((w, k) => {
+      w.visible = d.meshes[k].visible && (wire || (hi && !sil));
+      w.material = hi && !sil ? wireHot : sil ? wireSil : wireTex;
+    });
+  }
+  markers.visible = main;
+}
+let lastT = performance.now();
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.1, (now - lastT) / 1000); lastT = now;
+  if (!M) return;
+  if (ui.anim) { applyAnim(dt); markPosed(); }
+  if (!flat()) controls.update();
+  M.box.getCenter(head.target.position); head.position.copy(camera().position);
+  const sil = ui.look === 'sil';
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  stage.classList.toggle('dark', !sil);
+  renderer.setScissorTest(false);
+  renderer.setViewport(0, 0, w, h);
+  paint(sil, true);
+  renderer.render(scene, camera());
+  const inset = $('inset').checked;
+  $('insetFrame').classList.toggle('on', inset);
+  if (inset) {
+    const k = innerWidth <= 900 ? 0.34 : 0.28;
+    const iw = Math.round(w * k), ih = Math.round(h * k), x = w - iw - 12, y = 12;
+    renderer.setScissorTest(true);
+    renderer.setScissor(x, y, iw, ih);
+    renderer.setViewport(x, y, iw, ih);
+    paint(!sil, false);
+    renderer.render(scene, camera());
+    renderer.setScissorTest(false);
+    renderer.setViewport(0, 0, w, h);
+  }
+  drawPins();
+  drawRig();
+}
+requestAnimationFrame(frame);
+
+// --- Panels --------------------------------------------------------------------------------------------
+function setMode(id) {
+  ui.mode = id;
+  ui.tool = lastTool[id];
+  if (id !== 'rig') ui.anim = null;
+  if (EDIT_TOOLS.has(ui.tool)) ensureRest();
+  renderAll();
+}
+function pickTool(id) {
+  const mode = MODES.find((m) => m.tools.includes(id));
+  if (mode && mode.id !== ui.mode) ui.mode = mode.id;
+  ui.tool = id;
+  lastTool[ui.mode] = id;
+  if (EDIT_TOOLS.has(id)) { ui.anim = null; ensureRest(); }
+  renderAll();
+}
+function renderAll() { renderChrome(); renderOpts(); renderPanel(); renderHint(); renderVariant(); refreshMarkers(); renderSummary(); }
+
+function renderChrome() {
+  $('models').replaceChildren(...MODELS.map((m) => el('button', { type: 'button', 'aria-pressed': String(m.id === ui.model), text: m.label,
+    onclick: () => { if (ui.model === m.id) return; ui.model = m.id; renderChrome(); buildModel(); } })));
+  $('modes').replaceChildren(...MODES.map((m) => el('button', { type: 'button', 'aria-pressed': String(m.id === ui.mode), text: m.label, onclick: () => setMode(m.id) })));
+  const mode = MODES.find((m) => m.id === ui.mode);
+  $('tools').replaceChildren(...mode.tools.map((id) => {
+    const t = TOOLS[id];
+    const b = el('button', { type: 'button', class: 'tool', 'aria-pressed': String(ui.tool === id), onclick: () => pickTool(id) });
+    b.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${ICON[id]}</svg><span>${t.label}</span><kbd>${t.key}</kbd>`;
+    return b;
+  }));
+  $('views').replaceChildren(...VIEWS.map(([v, label], i) => el('button', { type: 'button', 'data-v': v, 'aria-pressed': String(ui.view === v), title: `Key ${i + 1}`, text: label, onclick: () => setView(v) })));
+  $('looks').replaceChildren(...[['sil', 'Silhouette'], ['tex', 'Textured']].map(([v, label]) => el('button', { type: 'button', 'aria-pressed': String(ui.look === v), text: label, onclick: () => { ui.look = v; renderChrome(); } })));
+}
+
+function renderVariant() {
+  const box = $('variant');
+  box.replaceChildren();
+  if (!M) return;
+  if ((M.data.meta?.headwear || []).length && !M.def.only) {
+    box.append(seg('Headwear', [['none', 'None'], ...M.data.meta.headwear.map((h) => [h, h[0].toUpperCase() + h.slice(1)])], ui.headwear, (h) => { ui.headwear = h; buildModel(); }));
+  }
+  if ((M.data.meta?.tint || []).length) {
+    box.append(el('div', { class: 'field' }, 'Player colour', el('div', { class: 'seg', role: 'group', 'aria-label': 'Player colour' }, ...PLAYER.map((c, i) =>
+      el('button', { type: 'button', 'aria-pressed': String(ui.slot === i), text: `P${i + 1}`, style: `box-shadow: inset 0 -3px 0 ${c}`, onclick: () => { ui.slot = i; renderVariant(); show(M.shown); } })))));
+  }
+}
+
+let fid = 0;
+function slider(label, min, max, step, value, fmt, on, done) {
+  const id = `f${++fid}`;
+  const out = el('output', { for: id, text: fmt(value) });
+  const input = el('input', { type: 'range', id, min, max, step, value, oninput: (e) => { out.textContent = fmt(+e.target.value); on(+e.target.value); } });
+  if (done) input.addEventListener('change', (e) => done(+e.target.value));
+  return el('div', { class: 'field' }, el('label', { for: id }, `${label} `, out), input);
+}
+function seg(label, options, value, on) {
+  return el('div', { class: 'field' }, label, el('div', { class: 'seg', role: 'group', 'aria-label': label }, ...options.map(([v, l]) =>
+    el('button', { type: 'button', 'aria-pressed': String(value === v), text: l, onclick: () => on(v) }))));
+}
+const cm = (v) => `${Math.round(v * 1000) / 10} cm`;
+
+function renderOpts() {
+  const t = TOOLS[ui.tool];
+  const kids = [el('h2', { text: t.label }), el('p', { class: 'toolhelp', text: t.help })];
+  if (['move', 'inflate', 'smooth'].includes(ui.tool)) {
+    kids.push(slider('Brush size', 0.01, 0.4, 0.005, ui.radius, cm, (v) => { ui.radius = v; }));
+    kids.push(slider('Strength', 0.1, 2, 0.05, ui.strength, (v) => `${v.toFixed(2)}×`, (v) => { ui.strength = v; }));
+    kids.push(el('label', { class: 'check' }, el('input', { type: 'checkbox', checked: ui.only, onchange: (e) => { ui.only = e.target.checked; } }), 'Only the part under the brush'));
+  }
+  if (['move', 'size', 'joint', 'vsel'].includes(ui.tool)) {
+    kids.push(seg('Direction', [['free', 'Any'], ['horiz', '↔ only'], ['vert', '↕ only']], ui.lock, (v) => { ui.lock = v; renderOpts(); }));
+  }
+  if (ui.tool === 'poke') kids.push(slider('Strength', 0.1, 2, 0.05, ui.strength, (v) => `${v.toFixed(2)}×`, (v) => { ui.strength = v; }));
+  if ((ui.tool === 'size' || ui.tool === 'tint') && ui.selPart) kids.push(el('p', { class: 'toolhelp', text: `Part: ${ui.selPart}` }));
+  if (ui.tool === 'tint') {
+    if (!ui.selPart) kids.push(el('p', { class: 'empty', text: 'Click a part of the model to choose it.' }));
+    else {
+      const part = ui.selPart;
+      const now = () => lab().tints[part] || { c: '#ffffff', b: 1 };
+      const set = (patch) => { lab().tints[part] = { ...now(), ...patch }; show(M.shown); };
+      const bright = slider('Brightness', 0.4, 1.8, 0.05, now().b ?? 1, (v) => `${v.toFixed(2)}×`, (v) => set({ b: v }), () => save());
+      bright.querySelector('input').addEventListener('pointerdown', () => remember());
+      kids.push(
+        el('div', { class: 'field' }, el('label', { for: 'tintC' }, 'Tint'), el('input', { type: 'color', id: 'tintC', value: now().c, onclick: () => remember(), oninput: (e) => set({ c: e.target.value }), onchange: () => save() })),
+        bright,
+        el('div', { class: 'row' }, el('button', { class: 'btn', type: 'button', text: 'Clear tint', onclick: () => { remember(); delete lab().tints[part]; save(); show(M.shown); renderOpts(); } })));
+    }
+  }
+  if (ui.tool === 'place') {
+    kids.push(el('div', { class: 'palette', role: 'group', 'aria-label': 'Shape' }, ...KIND_LIST.map(([k, label, icon]) => {
+      const b = el('button', { type: 'button', 'aria-pressed': String(ui.kind === k), onclick: () => { ui.kind = k; renderOpts(); } });
+      b.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${icon}</svg><span>${label}</span>`;
+      return b;
+    })));
+    kids.push(slider('Size', 0.005, 0.15, 0.001, ui.partS, cm, (v) => { ui.partS = v; }));
+    kids.push(slider('Length', 0.01, 0.4, 0.002, ui.partLen, cm, (v) => { ui.partLen = v; }));
+    kids.push(slider('Lean', -60, 60, 1, ui.partLean, (v) => `${v}°`, (v) => { ui.partLean = v; }));
+    kids.push(slider('Twist', -180, 180, 1, ui.partTwist, (v) => `${v}°`, (v) => { ui.partTwist = v; }));
+  }
+  $('opts').replaceChildren(...kids);
+}
+
+function renderHint() {
+  const orbitNo = !flat() && ['vsel', 'fsel'].includes(ui.tool);
+  const touch = matchMedia('(pointer: coarse)').matches;
+  $('hint').textContent = orbitNo ? 'Box selection works in the flat views; click to select here.'
+    : !flat() ? (touch ? 'Drag empty space to turn · pinch to zoom' : 'Drag empty space to turn · scroll to zoom')
+    : touch ? 'Two fingers to zoom and pan' : 'Scroll to zoom · right-drag or Space-drag to pan';
+}
+
+// The right-hand panel for the current mode.
+function renderPanel(focusNote) {
+  const box = $('panel');
+  if (!M) { box.replaceChildren(); return; }
+  const L = lab();
+  const kids = [];
+  const staleN = L.stale ? (Array.isArray(L.stale.ops) ? L.stale.ops.length : L.stale.ops) : 0;
+  if (staleN) kids.push(el('p', { class: 'banner', text: `${staleN} edits made before this model was last baked are set aside and kept. You are editing the baked model now.` }));
+  if (ui.mode === 'rig') kids.push(...rigPanel());
+  if (ui.mode === 'mesh') kids.push(...meshPanel());
+  if (ui.mode === 'parts') kids.push(...partsPanel());
+  if (ui.mode === 'paint') kids.push(...paintPanel());
+  box.replaceChildren(...kids);
+  if (ui.mode === 'paint') {
+    drawPage();
+    if (focusNote && ui.selNote) { const t = $(`note-${ui.selNote}`); if (t) { t.scrollIntoView({ block: 'nearest' }); t.focus({ preventScroll: true }); } }
+  }
+}
+
+function rigPanel() {
+  const kids = [el('h2', { text: 'Test drive' })];
+  if (M.def.anims.length) {
+    kids.push(el('div', { class: 'seg', role: 'group', 'aria-label': 'Animation' }, ...M.def.anims.map((a) =>
+      el('button', { type: 'button', 'aria-pressed': String(ui.anim === a), text: ANIM_LABEL[a], onclick: () => { if (ui.anim === a) { restPose(); return; } ui.anim = a; animT = 0; renderPanel(); } }))));
+    kids.push(slider('Speed', 0.1, 2, 0.05, ui.animSpeed, (v) => `${v.toFixed(2)}×`, (v) => { ui.animSpeed = v; }));
+    kids.push(el('p', { class: 'toolhelp', text: M.def.id === 'ghoul' || M.def.id === 'hound' ? 'These are the game\'s own animations, so you see how your shapes move in play.' : 'A simple sway to check how the joints bend.' }));
+  } else kids.push(el('p', { class: 'empty', text: 'This prop has no joints.' }));
+  kids.push(el('div', { class: 'row' }, el('button', { class: 'btn', type: 'button', text: 'Rest pose', onclick: () => restPose() })));
+  // Joint tree.
+  const J = M.shown.joints;
+  const kidsOf = childrenOf(J);
+  const partsAt = {};
+  for (const p of M.shown.parts) for (const j of p.at || [p.joint]) if (j) (partsAt[j] ||= []).push(p);
+  const rows = [];
+  const walk = (n, depth) => {
+    const ps = (partsAt[n] || []).filter((p) => !hidden(p.name));
+    const tris = ps.reduce((s, p) => s + (p.idx.length / 3 - (p.dead ? p.dead.size : 0)), 0);
+    rows.push(el('button', { type: 'button', 'aria-pressed': String(ui.selJoint === n), onclick: () => { ui.selJoint = ui.selJoint === n ? null : n; renderPanel(); } },
+      el('span', {}, `${'  '.repeat(depth)}${depth ? '└ ' : ''}${n}`), el('small', { text: ps.length ? `${ps.map((p) => p.name).join(', ')} · ${tris}▲` : '' })));
+    for (const c of kidsOf[n] || []) walk(c, depth + 1);
+  };
+  for (const [n, j] of Object.entries(J)) if (!j.parent) walk(n, 0);
+  kids.push(el('h2', { text: 'Joints' }), el('div', { class: 'tree', style: 'white-space:pre' }, ...rows));
+  if (ui.selJoint && J[ui.selJoint]) {
+    const w = jointWorld(J)[ui.selJoint];
+    kids.push(el('p', { class: 'toolhelp', text: `${ui.selJoint}: ${w.map((v) => (v * 100).toFixed(1)).join(', ')} cm from the feet (x, y, z)` }));
+  }
+  return kids;
+}
+
+function meshPanel() {
+  const kids = [];
+  const nv = selCount(sel.verts), nf = selCount(sel.faces);
+  kids.push(el('h2', { text: 'Selection' }));
+  if (ui.tool === 'vsel' || nv) kids.push(el('p', { class: 'toolhelp', text: nv ? `${nv} corner${nv === 1 ? '' : 's'} selected. Drag one to move them all.` : 'No corners selected.' }));
+  if (ui.tool !== 'vsel' || nf) kids.push(el('p', { class: 'toolhelp', text: nf ? `${nf} triangle${nf === 1 ? '' : 's'} selected.` : 'No triangles selected.' }));
+  kids.push(el('div', { class: 'row' },
+    el('button', { class: 'btn warn', type: 'button', text: 'Delete triangles', disabled: !nf, onclick: () => deleteFaces() }),
+    el('button', { class: 'btn', type: 'button', text: 'Clear selection', disabled: !nv && !nf, onclick: () => { clearSel(); refreshMarkers(); renderPanel(); } })));
+  // Triangle budget.
+  const rows = [];
+  let total = 0, base = 0;
+  for (const p of M.shown.parts) {
+    if (hidden(p.name)) continue;
+    const n = p.idx.length / 3 - (p.dead ? p.dead.size : 0);
+    total += n;
+    const b = M.base.parts.find((q) => q.name === p.name);
+    base += b ? b.idx.length / 3 : 0;
+    rows.push(el('tr', { class: ui.selPart === p.name ? 'hot' : '' }, el('td', { text: p.add ? `${p.name} (added)` : p.name }), el('td', { text: String(n) })));
+  }
+  rows.push(el('tr', { class: 'total' }, el('td', { text: 'Total' }), el('td', { text: `${total}${total !== base ? ` (${total > base ? '+' : ''}${total - base})` : ''}` })));
+  kids.push(el('h2', { text: 'Triangles' }), el('table', { class: 'stats' }, el('tbody', {}, ...rows)),
+    el('p', { class: 'toolhelp', text: 'The 1997 budget is 6,000 triangles per model; these are well inside it.' }));
+  return kids;
+}
+
+function partsPanel() {
+  const kids = [el('h2', { text: 'Placed parts' })];
+  const adds = lab().ops.filter((o) => o.t === 'add');
+  if (!adds.length) kids.push(el('p', { class: 'empty', text: 'Nothing added yet. Pick a shape above and click the model.' }));
+  else kids.push(el('div', { class: 'seg' }, ...adds.map((o) => el('button', { type: 'button', 'aria-pressed': String(ui.selAdd === o.id), text: `${o.kind} ${o.id}`, onclick: () => { ui.selAdd = o.id; renderPanel(); } }))));
+  const op = ui.selAdd != null && addOp(ui.selAdd);
+  if (op) {
+    const set = (k) => (v) => { op[k] = v; commitAll(); };
+    const hold = (node) => { node.querySelector('input').addEventListener('pointerdown', () => remember()); return node; };
+    kids.push(el('h2', { text: `${op.kind} ${op.id}` }),
+      hold(slider('Size', 0.005, 0.15, 0.001, op.s, cm, set('s'), () => save())),
+      hold(slider('Length', 0.01, 0.4, 0.002, op.len, cm, set('len'), () => save())),
+      hold(slider('Lean', -60, 60, 1, op.lean, (v) => `${v}°`, set('lean'), () => save())),
+      hold(slider('Twist', -180, 180, 1, op.twist, (v) => `${v}°`, set('twist'), () => save())),
+      el('label', { class: 'check' }, el('input', { type: 'checkbox', checked: op.mirror, onchange: (e) => { remember(); op.mirror = e.target.checked; commitAll(); save(); } }), 'Mirrored on the other side'),
+      el('div', { class: 'row' },
+        el('button', { class: 'btn' + (ui.pickColour ? ' on' : ''), type: 'button', text: ui.pickColour ? 'Click the page below…' : 'Colour from the page', onclick: () => { ui.pickColour = !ui.pickColour; renderPanel(); } }),
+        el('button', { class: 'btn warn', type: 'button', text: 'Remove part', onclick: () => { remember(); lab().ops.splice(lab().ops.indexOf(op), 1); ui.selAdd = null; commitAll(); save(); renderPanel(); } })));
+    kids.push(pageCanvas());
+  }
+  return kids;
+}
+
+function paintPanel() {
+  const kids = [el('h2', { text: 'Texture notes' })];
+  const list = lab().notes;
+  if (!list.length) kids.push(el('p', { class: 'empty', text: 'No notes yet. Pick "Texture note" and click the model where a texture detail should go.' }));
+  const notes = el('div', { class: 'notes', id: 'notes' });
+  list.forEach((n, i) => {
+    const color = (TAGS[n.tag] || TAGS.other)[1];
+    const shown = !!notePlace(n);
+    const ta = el('textarea', { id: `note-${n.id}`, 'aria-label': `Note ${i + 1} text`, placeholder: 'What should the texture show here?', value: n.text || '',
+      onfocus: () => { if (ui.selNote !== n.id) { ui.selNote = n.id; markSel(); } }, oninput: (e) => { n.text = e.target.value; save(true); } });
+    const size = slider('Patch size', 2, 40, 1, n.size || 6, (v) => `${v} cm`, (v) => { n.size = v; }, () => save());
+    notes.append(el('div', { class: 'note' + (ui.selNote === n.id ? ' sel' : '') + (shown ? '' : ' gone'), 'data-id': n.id, onclick: () => { if (ui.selNote !== n.id) { ui.selNote = n.id; markSel(); } } },
+      el('div', { class: 'head' },
+        el('span', { class: 'num', text: String(i + 1), style: `background:${color}` }),
+        el('select', { 'aria-label': `Note ${i + 1} texture kind`, onchange: (e) => { remember(); n.tag = e.target.value; save(); renderPanel(); } },
+          ...Object.entries(TAGS).map(([k, [label]]) => el('option', { value: k, text: label, selected: n.tag === k }))),
+        el('span', { class: 'part', text: shown ? n.part : `${n.part} (not shown)` }),
+        el('button', { class: 'btn', type: 'button', text: '✕', 'aria-label': `Delete note ${i + 1}`, style: 'margin-left:auto;padding:2px 8px;min-height:28px',
+          onclick: (e) => { e.stopPropagation(); remember(); lab().notes.splice(lab().notes.indexOf(n), 1); if (ui.selNote === n.id) ui.selNote = null; save(); renderPanel(); } })),
+      ta, size));
+  });
+  kids.push(notes);
+  kids.push(el('h2', { text: 'Texture page' }), pageCanvas(), el('p', { class: 'toolhelp', text: 'Numbers mark where each note lands on the painted page.' }));
+  const a = () => (lab().page ||= { ...PAGE0 });
+  let raf = 0;
+  const set = (k) => (v) => { a()[k] = v; cancelAnimationFrame(raf); raf = requestAnimationFrame(() => { paintPage(ui.model); drawPage(); }); };
+  const sliders = [
+    slider('Brightness', 0.5, 1.8, 0.02, a().b, (v) => `${v.toFixed(2)}×`, set('b'), () => save()),
+    slider('Contrast', 0.5, 1.8, 0.02, a().c, (v) => `${v.toFixed(2)}×`, set('c'), () => save()),
+    slider('Saturation', 0, 2, 0.02, a().s, (v) => `${v.toFixed(2)}×`, set('s'), () => save()),
+    slider('Hue shift', -180, 180, 1, a().h, (v) => `${v}°`, set('h'), () => save()),
+  ];
+  for (const s of sliders) s.querySelector('input').addEventListener('pointerdown', () => remember());
+  if (!filterOK) kids.push(el('p', { class: 'toolhelp', text: 'This browser cannot adjust images on a canvas, so page changes are saved but not previewed.' }));
+  kids.push(...sliders, el('div', { class: 'row' }, el('button', { class: 'btn', type: 'button', text: 'Reset page', onclick: () => { remember(); lab().page = { ...PAGE0 }; paintPage(ui.model); save(); renderPanel(); } })));
+  return kids;
+}
+function markSel() {
+  for (const c of document.querySelectorAll('.note')) c.classList.toggle('sel', c.dataset.id === ui.selNote);
+  drawPage();
+}
+
+// The painted page, with numbered dots where notes land. In Parts mode, a click picks a colour.
+function pageCanvas() {
+  const c = el('canvas', { id: 'page', 'aria-label': 'Texture page' });
+  c.addEventListener('click', (ev) => {
+    const r = c.getBoundingClientRect();
+    const u = (ev.clientX - r.left) / r.width, v = (ev.clientY - r.top) / r.height;
+    if (ui.mode === 'parts' && ui.pickColour && ui.selAdd != null) {
+      const op = addOp(ui.selAdd);
+      if (op) { remember(); op.uv = [r4(u), r4(v)]; ui.pickColour = false; commitAll(); save(); renderPanel(); }
+      return;
+    }
+    let best = null, bd = 0.04;
+    for (const n of lab().notes) if (n.uv) { const d = Math.hypot(n.uv[0] - u, n.uv[1] - v); if (d < bd) { bd = d; best = n; } }
+    if (best) { ui.selNote = best.id; renderPanel(true); }
+  });
+  const wrap = el('div', { class: 'page' + (ui.pickColour ? ' picking' : '') }, c);
+  requestAnimationFrame(drawPage);
+  return wrap;
+}
+function drawPage() {
+  const c = $('page');
+  const p = pages[ui.model];
+  if (!c || !p) return;
+  const W = p.canvas.width, H = p.canvas.height, S = Math.max(1, Math.round(512 / Math.max(W, H)));
+  if (c.width !== W * S || c.height !== H * S) { c.width = W * S; c.height = H * S; }
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(p.canvas, 0, 0, W * S, H * S);
+  const r = 10 * (c.width / 512);
+  const dot = (u, v, fill, label, ring) => {
+    const x = u * W * S, y = v * H * S;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fillStyle = fill; ctx.fill();
+    ctx.lineWidth = r * 0.22; ctx.strokeStyle = ring; ctx.stroke();
+    if (label) { ctx.fillStyle = '#fff'; ctx.font = `bold ${Math.round(r * 1.1)}px ui-monospace, monospace`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(label, x, y + 1); }
+  };
+  if (ui.mode === 'parts') {
+    const op = ui.selAdd != null && addOp(ui.selAdd);
+    if (op && op.uv) dot(op.uv[0], op.uv[1], 'rgba(0,0,0,0)', '', '#ffcf6a');
+    return;
+  }
+  lab().notes.forEach((n, i) => { if (n.uv) dot(n.uv[0], n.uv[1], (TAGS[n.tag] || TAGS.other)[1], String(i + 1), ui.selNote === n.id ? '#ffcf6a' : '#fff'); });
+}
+
+function renderSummary() {
+  if (!M) return;
+  const L = lab();
+  const n = {};
+  for (const o of L.ops) n[o.t] = (n[o.t] || 0) + 1;
+  const names = { move: 'push/pull', inflate: 'swell', smooth: 'smooth', stretch: 'size', joint: 'joint', verts: 'vertex move', del: 'delete', poke: 'poke', add: 'added part' };
+  const parts = Object.entries(n).map(([k, v]) => `${v} ${names[k] || k}`).join(', ');
+  const pl = (k, w) => `${k} ${w}${k === 1 ? '' : 's'}`;
+  $('summary').textContent = `${pl(L.ops.length, 'edit')}${parts ? ` (${parts})` : ''} · ${pl(L.notes.length, 'note')} · ${pl(Object.keys(L.tints).length, 'tint')} · model ${M.rev}`;
+  $('undo').disabled = !his().undo.length;
+  $('redo').disabled = !his().redo.length;
+}
+
+function restore(json) {
+  labs[ui.model] = JSON.parse(json);
+  paintPage(ui.model);
+  clearSel();
+  ensureRest();
+  commitAll(); save(); renderAll();
+}
+function undo() { const h = his(); if (!h.undo.length) return; h.redo.push(JSON.stringify(lab())); restore(h.undo.pop()); }
+function redo() { const h = his(); if (!h.redo.length) return; h.undo.push(JSON.stringify(lab())); restore(h.redo.pop()); }
+$('undo').addEventListener('click', undo);
+$('redo').addEventListener('click', redo);
+let resetArm = 0;
+$('reset').addEventListener('click', () => {
+  const b = $('reset');
+  if (Date.now() - resetArm > 3000) { resetArm = Date.now(); b.textContent = 'Click again to reset'; setTimeout(() => { b.textContent = 'Reset model'; }, 3000); return; }
+  remember(); resetArm = 0; b.textContent = 'Reset model';
+  const L = lab();
+  restore(JSON.stringify({ ...blank(M.rev), nextId: L.nextId || 1 }));
+});
+$('copy').addEventListener('click', async () => {
+  const text = JSON.stringify(labs, null, 1);
+  try { await navigator.clipboard.writeText(text); status('Copied every model\'s edits and notes as JSON'); }
+  catch {
+    const ta = el('textarea', { class: 'sr', 'aria-label': 'Workshop JSON' }); ta.value = text; document.body.append(ta); ta.select();
+    try { document.execCommand('copy'); status('Copied every model\'s edits and notes as JSON'); } catch { status('Copy is blocked here'); }
+    ta.remove();
+  }
+});
+$('lowres').addEventListener('change', resize);
+for (const id of ['wire', 'bones']) $(id).addEventListener('change', () => refreshMarkers());
+
+addEventListener('keyup', (e) => { if (e.code === 'Space') spaceHeld = false; });
+addEventListener('blur', () => { spaceHeld = false; });
+addEventListener('keydown', (e) => {
+  if (e.target.closest && e.target.closest('textarea, input:not([type="checkbox"]):not([type="range"]), select')) return;
+  if (e.code === 'Space') { spaceHeld = true; if (e.target === document.body) e.preventDefault(); return; }
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+  if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
+  if (mod || e.altKey) return;
+  if (e.key === 'Escape') { clearSel(); ui.selAdd = null; ui.pickColour = false; refreshMarkers(); renderPanel(); return; }
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    if (ui.mode === 'mesh' && deleteFaces()) { e.preventDefault(); return; }
+    if (ui.mode === 'parts' && ui.selAdd != null) { const op = addOp(ui.selAdd); if (op) { remember(); lab().ops.splice(lab().ops.indexOf(op), 1); ui.selAdd = null; commitAll(); save(); renderPanel(); } return; }
+    if (ui.mode === 'paint' && ui.selNote) { const L = lab(), i = L.notes.findIndex((n) => n.id === ui.selNote); if (i >= 0) { remember(); L.notes.splice(i, 1); ui.selNote = null; save(); renderPanel(); } }
+    return;
+  }
+  if (e.key === 'f' || e.key === 'F') { setView(ui.view); return; }
+  const t = Object.entries(TOOLS).find(([, x]) => x.key.toLowerCase() === e.key.toLowerCase());
+  if (t) { pickTool(t[0]); return; }
+  const v = VIEWS[+e.key - 1];
+  if (v) setView(v[0]);
+});
+
+// --- Saving: the page's shared store when this view has one; this browser as a fallback -------------
+function status(t) { $('status').textContent = t; }
+const LOCAL = 'nb-model-workshop-v2';
+let db = null, saveT = 0, writing = Promise.resolve(), readOnly = false;
+const dirty = new Set();
+function save(slow) {
+  lab().updatedAt = new Date().toISOString();
+  dirty.add(ui.model);
+  renderSummary();
+  if (ui.mode === 'paint') drawPage();
+  clearTimeout(saveT);
+  saveT = setTimeout(flush, slow ? 700 : 250);
+}
+function flush() {
+  try { localStorage.setItem(LOCAL, JSON.stringify(labs)); } catch { /* storage blocked */ }
+  if (!db || readOnly) { dirty.clear(); return; }
+  const ids = [...dirty];
+  dirty.clear();
+  writing = writing.then(async () => {
+    for (const id of ids) {
+      try { await db.doc(`labs/${id}`).set(JSON.parse(JSON.stringify(labs[id]))); status('Saved'); }
+      catch (e) {
+        if (e && e.code === 'invalid_argument') { readOnly = true; status('View only: your edits stay in this browser'); }
+        else status('Could not save just now; edits are kept in this browser');
+      }
+    }
+  });
+}
+
+// Headless checks (?test) read screen positions of things drawn in WebGL.
+if (/[?&]test\b/.test(location.search)) {
+  const at = (s) => { const r = canvas.getBoundingClientRect(); return { x: r.left + s.x, y: r.top + s.y }; };
+  window.__ws = {
+    corners: () => corners().map((c) => ({ part: c.part, ...at(toScreen(c.w)) })),
+    handles: () => rigHandles().map((h) => ({ j: h.j, kind: h.kind, ...at(h.s) })),
+    ops: () => lab().ops.map((o) => o.t),
+    posed: () => !!(M && M.posed),
+  };
+}
+
+async function boot() {
+  renderChrome();
+  try { Object.assign(labs, JSON.parse(localStorage.getItem(LOCAL) || '{}')); } catch { /* ignore */ }
+  await buildModel();
+  status('Ready');
+  try { db = await window.claude?.use?.('db'); } catch { db = null; }
+  if (!db) { status('Ready · edits stay in this browser'); return; }
+  try {
+    const snap = await db.collection('labs').get();
+    const have = new Set(), push = [];
+    for (const d of snap.docs) {
+      if (!d.exists) continue;
+      have.add(d.id);
+      const v = d.data();
+      const local = labs[d.id];
+      if (local && (local.updatedAt || '') > (v.updatedAt || '')) { push.push(d.id); continue; }
+      labs[d.id] = { ...blank(), ...structuredClone(v) };
+    }
+    for (const id of Object.keys(labs)) if (!have.has(id) && labs[id].updatedAt) push.push(id);
+    for (const id of push) dirty.add(id);
+    if (push.length) flush();
+    for (const id of Object.keys(pages)) paintPage(id);
+    checkRev(M.def.id, M.rev);
+    commitAll(); renderAll();
+    status('Ready · edits save to this page');
+  } catch { status('Ready · saved edits could not be loaded'); }
+}
+boot();
+</script>
+</body>
+</html>

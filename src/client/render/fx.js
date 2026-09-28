@@ -4,7 +4,11 @@
 import * as THREE from 'three';
 import { LIGHTS } from '../../shared/map.js';
 import { stepBody } from '../../shared/sim.js';
+import { WEAPONS } from '../../shared/weapons.js';
+import { HOUND_SCALE as HS, HOUND_MID } from '../../shared/enemies.js';
 import { buildGrenade, buildPowerupModel } from './weapons3d.js';
+
+const _zap = new THREE.Vector3();
 
 class Particles {
   constructor(scene, cap, additive) {
@@ -223,6 +227,105 @@ export class FX {
       return { line, life: 0 };
     });
     this.fires = [];
+    // Chain lightning: every live chain's bolts, re-jagged each frame, in one line buffer.
+    this.chainCap = 2400;
+    const cg = new THREE.BufferGeometry();
+    cg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(this.chainCap * 3), 3).setUsage(THREE.DynamicDrawUsage));
+    this.chainLines = new THREE.LineSegments(cg, new THREE.LineBasicMaterial({
+      color: 0xc8f4ff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, fog: false,
+    }));
+    this.chainLines.frustumCulled = false;
+    this.chainLines.visible = false;
+    this.scene.add(this.chainLines);
+    this.chains = [];
+  }
+
+  // --- Chain lightning ---------------------------------------------------------------
+  // n points; at(i) -> [x, y, z] (re-read every frame so bolts follow moving enemies).
+  // Bolt i runs from point from[i] (default i) to point i + 1 and strikes `delay` s
+  // after bolt i - 1;
+  // onHop(i, [x, y, z]) fires as it lands. `skip` bolts at the start are not drawn
+  // (the shooter already drew the first one).
+  chain(n, at, delay, onHop, skip = 0, from = null) {
+    if (this.chains.length >= 4) this.chains.shift();
+    this.chains.push({ t: 0, n, at, delay, onHop, skip, from, landed: 0 });
+  }
+
+  updateChains(dt) {
+    const LIFE = 0.24;
+    const pos = this.chainLines.geometry.attributes.position.array;
+    let k = 0;
+    const seg = (ax, ay, az, bx, by, bz) => {
+      if (k + 6 > pos.length) return;
+      pos[k++] = ax; pos[k++] = ay; pos[k++] = az; pos[k++] = bx; pos[k++] = by; pos[k++] = bz;
+    };
+    for (let c = this.chains.length - 1; c >= 0; c--) {
+      const ch = this.chains[c];
+      ch.t += dt;
+      for (let i = 0; i < ch.n - 1; i++) {
+        const t0 = i * ch.delay;
+        if (ch.t < t0 || ch.t > t0 + LIFE) continue;
+        const a = ch.at(ch.from?.[i] ?? i), b = ch.at(i + 1);
+        if (i < ch.skip) continue;
+        if (ch.landed <= i) {
+          ch.landed = i + 1;
+          ch.onHop?.(i, b);
+          this.zapSparks(b[0], b[1], b[2], i === ch.n - 2 ? 1.4 : 1);
+        }
+        // Flicker: blink off for a frame now and then (unless flashing is reduced).
+        if (!this.rig.calm && Math.random() < 0.18) continue;
+        this.jagged(a, b, seg, 1 - (ch.t - t0) / LIFE);
+      }
+      if (ch.t > (ch.n - 1) * ch.delay + LIFE) this.chains.splice(c, 1);
+    }
+    this.chainLines.geometry.setDrawRange(0, k / 3);
+    this.chainLines.geometry.attributes.position.needsUpdate = true;
+    this.chainLines.visible = k > 0;
+  }
+
+  // A jagged bolt from a to b: a main strand, a thinner twin around it (so it reads
+  // thick at 240 lines), a forked branch or two, and glow beads along it.
+  jagged(a, b, seg, strength) {
+    this.strand(a, b, seg, strength, 1, true);
+    this.strand(a, b, seg, strength, 0.45, false);
+  }
+
+  strand(a, b, seg, strength, scale, main) {
+    const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
+    const len = Math.hypot(dx, dy, dz) || 1;
+    const pieces = Math.max(4, Math.min(14, Math.round(len / 0.35)));
+    const amp = Math.min(0.5, len * 0.07) * (0.6 + 0.4 * strength) * scale;
+    let px = a[0], py = a[1], pz = a[2];
+    for (let j = 1; j <= pieces; j++) {
+      const u = j / pieces, w = j === pieces ? 0 : Math.sin(u * Math.PI) * amp;
+      const nx = a[0] + dx * u + (Math.random() - 0.5) * 2 * w;
+      const ny = a[1] + dy * u + (Math.random() - 0.5) * 2 * w;
+      const nz = a[2] + dz * u + (Math.random() - 0.5) * 2 * w;
+      seg(px, py, pz, nx, ny, nz);
+      if (main && j > 1 && j < pieces - 1 && Math.random() < 0.14) {
+        seg(nx, ny, nz, nx + (Math.random() - 0.5) * amp * 3, ny - Math.random() * amp * 2, nz + (Math.random() - 0.5) * amp * 3);
+      }
+      if (main) this.add.emit(nx, ny, nz, 0, 0, 0, 0.5, 0.85, 1, 0.9, 0.11 + Math.random() * 0.05, 0.05, 0, 0);
+      px = nx; py = ny; pz = nz;
+    }
+  }
+
+  // Blue-white sparks and a flash where a bolt lands.
+  zapSparks(x, y, z, n = 1) {
+    for (let i = 0; i < 22 * n; i++) {
+      const v = randDir(2 + Math.random() * 5);
+      this.add.emit(x, y, z, v[0], v[1] + 1, v[2], 0.6, 0.9, 1, 1, 0.035, 0.2 + Math.random() * 0.35, 9, 1);
+    }
+    this.add.emit(x, y, z, 0, 0, 0, 0.5, 0.85, 1, 0.7, 0.35 * n, 0.08, 0, 0, 2);
+    this.rig.muzzleFlash(_zap.set(x, y, z), 1.2, 0x8fd8ff, 0.09);
+  }
+
+  // An electrocuted body: sparks crawling over it (called each frame while it fries).
+  shockCrawl(x, y, z, h = 1.7) {
+    const yy = y + Math.random() * h;
+    const v = randDir(1.5);
+    this.add.emit(x + v[0] * 0.15, yy, z + v[2] * 0.15, v[0], v[1] + 0.5, v[2], 0.55, 0.85, 1, 1, 0.03, 0.12 + Math.random() * 0.12, 4, 1);
+    if (Math.random() < 0.3) this.alpha.emit(x, yy, z, 0, 0.5, 0, 0.12, 0.12, 0.13, 0.4, 0.2, 1.2, -0.1, 1, 0.8);
   }
 
   // --- Impacts -----------------------------------------------------------------------
@@ -293,8 +396,9 @@ export class FX {
     }
   }
 
-  explosion(x, y, z, kind) {
-    const arc = kind === 'arcpistol';
+  // blast: 'arc' (an electric burst) or 'fire' (rockets and grenades).
+  explosion(x, y, z, blast) {
+    const arc = blast === 'arc';
     if (arc) {
       for (let i = 0; i < 70; i++) {
         const v = randDir(4 + Math.random() * 6);
@@ -334,8 +438,9 @@ export class FX {
 
   // --- Projectiles -------------------------------------------------------------------
   projectile(id, weapon, x, y, z, vx, vy, vz) {
+    const P = WEAPONS[weapon]?.projectile || {};
     let mesh;
-    if (weapon === 'arcpistol') {
+    if (P.look === 'orb') {
       mesh = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 8), this.orbMat);
     } else {
       mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.5, 8).rotateX(Math.PI / 2), this.rocketMat);
@@ -343,8 +448,7 @@ export class FX {
     mesh.position.set(x, y, z);
     mesh.lookAt(x + vx, y + vy, z + vz);
     this.scene.add(mesh);
-    const grav = weapon === 'arcpistol' ? 0 : 2;
-    this.projectiles.set(id, { mesh, weapon, vx, vy, vz, grav, t: 0 });
+    this.projectiles.set(id, { mesh, look: P.look, vx, vy, vz, grav: P.gravity ?? 2, t: 0 });
   }
 
   removeProjectile(id) {
@@ -385,9 +489,9 @@ export class FX {
       const v = randDir(3 + Math.random() * 5);
       this.add.emit(x, y + 0.1, z, v[0], Math.abs(v[1]) + 1, v[2], 0.75, 0.85, 1, 1, 0.04, 0.3 + Math.random() * 0.4, 10, 1);
     }
-    this.add.emit(x, y + 0.3, z, 0, 0, 0, 0.7, 0.8, 1, 1, 2.2, 0.16, 0, 0, 4);
+    if (!this.rig.calm) this.add.emit(x, y + 0.3 * HS, z, 0, 0, 0, 0.7, 0.8, 1, 1, 2.2 * HS, 0.16, 0, 0, 4);
     this.houndFire(x, y, z, 0.9);
-    this.scorch.add(x, y + 0.015, z, 0, 1, 0, 1.4);
+    this.scorch.add(x, y + 0.015, z, 0, 1, 0, 1.4 * HS);
     this.rig.lightning(new THREE.Vector3(x, y, z));
   }
 
@@ -400,18 +504,18 @@ export class FX {
   houndBurst(x, y, z) {
     for (let i = 0; i < 34; i++) {
       const v = randDir(1.5 + Math.random() * 3);
-      this.add.emit(x, y + 0.5, z, v[0], Math.abs(v[1]) * 1.2 + 0.8, v[2], 1, 0.4 + Math.random() * 0.3, 0.08, 1, 0.22 + Math.random() * 0.25, 0.35 + Math.random() * 0.35, -0.6, 2.2, 1.2);
+      this.add.emit(x, y + HOUND_MID, z, v[0], Math.abs(v[1]) * 1.2 + 0.8, v[2], 1, 0.4 + Math.random() * 0.3, 0.08, 1, (0.22 + Math.random() * 0.25) * HS, 0.35 + Math.random() * 0.35, -0.6, 2.2, 1.2);
     }
     for (let i = 0; i < 14; i++) {
       const v = randDir(0.8);
-      this.alpha.emit(x, y + 0.6, z, v[0], Math.abs(v[1]) + 0.9, v[2], 0.07, 0.06, 0.05, 0.75, 0.45 + Math.random() * 0.3, 1.6 + Math.random(), -0.2, 1, 0.9);
+      this.alpha.emit(x, y + HOUND_MID + 0.1, z, v[0], Math.abs(v[1]) + 0.9, v[2], 0.07, 0.06, 0.05, 0.75, (0.45 + Math.random() * 0.3) * HS, 1.6 + Math.random(), -0.2, 1, 0.9);
     }
     for (let i = 0; i < 16; i++) {
       const v = randDir(3 + Math.random() * 3);
-      this.add.emit(x, y + 0.5, z, v[0], Math.abs(v[1]) + 2, v[2], 1, 0.6, 0.2, 1, 0.035, 0.8 + Math.random() * 0.8, 9, 0.4);
+      this.add.emit(x, y + HOUND_MID, z, v[0], Math.abs(v[1]) + 2, v[2], 1, 0.6, 0.2, 1, 0.035, 0.8 + Math.random() * 0.8, 9, 0.4);
     }
-    this.scorch.add(x, y + 0.015, z, 0, 1, 0, 1.1);
-    this.rig.explosionFlash(new THREE.Vector3(x, y + 0.6, z));
+    this.scorch.add(x, y + 0.015, z, 0, 1, 0, 1.1 * HS);
+    this.rig.explosionFlash(new THREE.Vector3(x, y + HOUND_MID, z));
   }
 
   // Glazed shards (white with blue flecks) and gold dust. `n` scales the burst.
@@ -497,7 +601,7 @@ export class FX {
       f.t -= dt;
       if (f.t <= 0) { this.fires.splice(i, 1); continue; }
       for (let k = 0; k < 3; k++) {
-        const a = Math.random() * 6.28, r = 0.25 + Math.random() * 0.35;
+        const a = Math.random() * 6.28, r = (0.25 + Math.random() * 0.35) * HS;
         this.add.emit(f.x + Math.cos(a) * r, f.y + 0.05, f.z + Math.sin(a) * r, 0, 1.2 + Math.random() * 1.4, 0,
           1, 0.35 + Math.random() * 0.3, 0.06, 0.9, 0.16 + Math.random() * 0.18, 0.35 + Math.random() * 0.3, -0.4, 1, -0.2);
       }
@@ -505,9 +609,11 @@ export class FX {
     for (const b of this.bolts) {
       if (b.life <= 0) continue;
       b.life -= dt;
-      b.line.material.opacity = b.life > 0.2 ? 1 : b.life > 0.14 ? 0.15 : Math.max(0, b.life / 0.14);
+      // The bolt blinks twice; with reduced flashing it simply fades.
+      b.line.material.opacity = this.rig.calm ? Math.max(0, b.life / 0.32) * 0.7 : b.life > 0.2 ? 1 : b.life > 0.14 ? 0.15 : Math.max(0, b.life / 0.14);
       if (b.life <= 0) b.line.visible = false;
     }
+    this.updateChains(dt);
     this.add.update(dt);
     this.alpha.update(dt);
 
@@ -551,7 +657,7 @@ export class FX {
       p.vy -= p.grav * dt;
       p.mesh.position.x += p.vx * dt; p.mesh.position.y += p.vy * dt; p.mesh.position.z += p.vz * dt;
       const m = p.mesh.position;
-      if (p.weapon === 'arcpistol') {
+      if (p.look === 'orb') {
         this.add.emit(m.x, m.y, m.z, (Math.random() - 0.5) * 0.6, (Math.random() - 0.5) * 0.6, (Math.random() - 0.5) * 0.6, 0.4, 1, 0.9, 1, 0.14, 0.25, 0, 1, -0.3);
       } else {
         this.alpha.emit(m.x, m.y, m.z, (Math.random() - 0.5) * 0.3, 0.2, (Math.random() - 0.5) * 0.3, 0.55, 0.53, 0.5, 0.5, 0.25, 1.2, -0.1, 1, 0.8);
@@ -588,6 +694,8 @@ export class FX {
     this.holes.clear(); this.splats.clear(); this.scorch.clear();
     this.fires.length = 0;
     for (const b of this.bolts) { b.life = 0; b.line.visible = false; }
+    this.chains.length = 0;
+    this.chainLines.visible = false;
   }
 }
 

@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: ["main"]
   workflow_dispatch:
+    inputs:
+      deploy_worker:
+        description: "Upload the edge Worker even if its code did not change (restarts live lobbies and matches)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -17,9 +22,11 @@ concurrency:
 jobs:
   validate-and-notify:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0   # the Worker step diffs against the previous main
       - uses: actions/setup-node@v7.0.0
         with:
           node-version: "22"
@@ -104,3 +111,56 @@ jobs:
           done
           echo "Deploy Manager job $job_id exceeded the receipt polling limit" >&2
           exit 1
+      # The edge Worker (lobbies and matches on Cloudflare) ships right after the
+      # site is live, so a PROTOCOL change reaches both within a minute. Uploading it
+      # restarts every live lobby and match, so it only ships when its code or config
+      # changed (or on a manual run with deploy_worker).
+      - name: Decide whether the edge Worker changed
+        id: worker
+        if: >-
+          vars.DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/main' &&
+          (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        env:
+          BEFORE: ${{ github.event.before }}
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_worker }}
+        run: |
+          set -euo pipefail
+          protocol() { git show "$1:src/shared/protocol.js" 2>/dev/null | grep -o 'PROTOCOL = [0-9]*' || true; }
+          if [ "$FORCE" = "true" ]; then
+            changed=true; bumped=false
+          elif [ -z "$BEFORE" ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            changed=true; bumped=false   # no earlier commit to compare with
+          else
+            if git diff --quiet "$BEFORE" "$GITHUB_SHA" -- worker src/net src/shared wrangler.jsonc; then changed=false; else changed=true; fi
+            if [ "$(protocol "$BEFORE")" = "$(protocol "$GITHUB_SHA")" ]; then bumped=false; else bumped=true; fi
+          fi
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "protocol_bumped=$bumped" >> "$GITHUB_OUTPUT"
+          echo "Edge Worker changed: $changed (PROTOCOL bumped: $bumped)"
+      - name: Deploy the edge Worker
+        if: steps.worker.outputs.changed == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          PROTOCOL_BUMPED: ${{ steps.worker.outputs.protocol_bumped }}
+          WRANGLER_SEND_METRICS: "false"
+        run: |
+          set -euo pipefail
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            if [ "$PROTOCOL_BUMPED" = "true" ]; then
+              echo "::error::PROTOCOL changed but the Cloudflare token or account id is not configured: multiplayer stays broken until the edge Worker is uploaded."
+              exit 1
+            fi
+            echo "::warning::The edge Worker changed but CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID are not configured, so it was not uploaded."
+            exit 0
+          fi
+          npx --yes wrangler@4.142.0 deploy --minify
+      - name: Check the live site and edge
+        if: steps.worker.outcome == 'success'
+        env:
+          SITE: ${{ vars.SITE_URL || 'https://zombies.alirezaafshan.com' }}
+        run: |
+          set -euo pipefail
+          curl -fsS "$SITE/healthz" | grep -q "\"sha\":\"$GITHUB_SHA\""
+          curl -fsS "$SITE/net/health" | grep -q '"edge":true'
+          node scripts/mp-smoke.mjs --url "$SITE"

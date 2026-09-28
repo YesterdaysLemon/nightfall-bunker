@@ -19,16 +19,17 @@ export const IN = { USE: 1, SPRINT: 2, CROUCH: 4, ADS: 8, RELOAD: 16, FIRE: 32 }
 export const PLAYER_COLORS = ['#f2efe6', '#6aa9ff', '#ffd24a', '#6fdc7a'];
 
 // Cloudflare Durable Object location hints and friendly names.
+// Only hints where Durable Objects actually run. Cloudflare has none in South
+// America, Africa or the Middle East: objects hinted there ('sam', 'afr', 'me')
+// spawn in the nearest supported region (South America lands in Eastern North
+// America), so offering them only showed the wrong place.
 export const REGIONS = {
   wnam: 'Western North America',
   enam: 'Eastern North America',
-  sam: 'South America',
   weur: 'Western Europe',
   eeur: 'Eastern Europe',
   apac: 'Asia-Pacific',
   oc: 'Oceania',
-  afr: 'Africa',
-  me: 'Middle East',
 };
 
 // Pick the region that minimises the worst player's latency, breaking ties

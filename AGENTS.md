@@ -136,6 +136,14 @@ and the tests check each registry is complete.
 - Lobby placement: each player times round trips to a Durable Object beacon
   pinned in every location hint; on start the party creates the match object
   with the `locationHint` that minimises the worst player's latency.
+  - Probing (`probeRegions`, `src/client/net.js`) makes a quick parallel pass,
+    then re-measures the closest three one at a time.
+  - Neighbouring beacons can sit only 10–20 ms apart, and parallel probes jitter
+    by more than that (`tests/probe.test.js`).
+  - `REGIONS` lists only hints where Durable Objects run. Cloudflare has none in
+    South America, Africa or the Middle East, so `sam`, `afr` and `me` spawned
+    elsewhere (South America lands in Eastern North America) and showed the wrong
+    place; they were removed.
 
 ## Commands
 
@@ -295,11 +303,20 @@ Measured on 2026-09-27 (cold start, this PC's GPU): the menu's first frames went
   loopback 3290 (candidate 3291), health `/healthz` (reports the build SHA).
   Pushes to `main` run CI and then the signed Deploy Manager webhook.
 - Edge: Worker `nightfall-edge` on route `zombies.alirezaafshan.com/net/*`
-  (config in `wrangler.jsonc`). No Cloudflare API token is stored for CI, so
-  Worker releases are uploaded separately (the connected Cloudflare API tool or
-  `wrangler deploy` with an authorised token); the site and Worker share the
-  protocol in `src/shared/protocol.js` — bump `PROTOCOL` when it changes and
-  deploy both.
+  (config in `wrangler.jsonc`). The site and the Worker share the protocol in
+  `src/shared/protocol.js`: bump `PROTOCOL` when the wire format changes.
+  - **CD.** Pushes to `main` deploy it right after the site is live
+    (`.github/workflows/deploy.yml`, `wrangler deploy`). This happens only when
+    `worker/`, `src/net/`, `src/shared/` or `wrangler.jsonc` changed, because an
+    upload restarts every live lobby and match. A manual run with `deploy_worker`
+    forces it.
+  - **Credentials.** The secret `CLOUDFLARE_API_TOKEN` (owner-created) and the
+    variable `CLOUDFLARE_ACCOUNT_ID`. Without them CI warns, and it fails if
+    `PROTOCOL` changed.
+  - **Verification.** CI then checks `/healthz` and `/net/health`, and runs
+    `mp-smoke` against the live site.
+  - **By hand** (no token): the Cloudflare connector, with the bundle inlined as
+    checksummed chunks, because its sandbox can only reach the Cloudflare API.
 
 ## Acceptance
 

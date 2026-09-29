@@ -55,7 +55,8 @@ try {
   });
 
   // --- Reload contact sheet ---------------------------------------------------------------
-  const ids = await game(() => Object.keys(window.__weapons.WEAPONS));
+  // Forge upgrades share their base gun's model and reload: one shows the camo.
+  const ids = await game(() => Object.entries(window.__weapons.WEAPONS).filter(([id, W]) => !W.upgradeOf || id === 'm14_up').map(([id]) => id));
   const guns = (only.length ? only : ids);
   const sheet = [];
   for (const id of guns) {

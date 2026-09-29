@@ -29,6 +29,7 @@
     <div id="prompt" role="status"></div>
     <div id="crosshair"><i></i><i></i><i></i><i></i></div>
     <div id="powerups"></div>
+    <div id="perks" aria-label="Perks"></div>
     <div id="hurt"></div>
     <div id="hurtDir"></div>
     <div id="downed" hidden><div class="title">You are down</div><div class="sub">Hold on. A teammate can revive you.</div><div class="bar"><i></i></div></div>
@@ -56,6 +57,7 @@
         </div>
       </div>
       <label class="field"><span>Name</span><input id="nameInput" maxlength="16" autocomplete="nickname" spellcheck="false" /></label>
+      <div class="field"><span id="mapLabel">Map</span><div id="mapPick" class="mapPick" role="radiogroup" aria-labelledby="mapLabel"></div></div>
       <div class="actions">
         <button id="btnSolo" class="primary">Play solo</button>
         <button id="btnQuick">Quick match</button>
@@ -78,6 +80,7 @@
         <button id="btnCopy" class="small">Copy invite</button>
       </div>
       <ol id="members"></ol>
+      <div class="field"><span id="lobbyMapLabel">Map</span><div id="lobbyMap" class="mapPick" role="radiogroup" aria-labelledby="lobbyMapLabel"></div></div>
       <div id="regionInfo" class="region"></div>
       <details class="probes"><summary>Server regions</summary><table id="probeTable"></table></details>
       <div class="actions">

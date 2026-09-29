@@ -2,20 +2,25 @@
 // progress u (0..1), so every reload stretches to its gun's WEAPONS[id].reload.
 // The viewmodel (viewmodel.js) plays these; game.js plays the reload sound cues.
 // CYCLES (at the end) are the short actions after a shot: work the bolt, rack the
-// pump, the slide's kick, the Leyden Rifle's crank.
+// pump, the slide's kick, the Leyden Rifle's crank, a revolver's hammer; STYLE_CYCLES
+// picks one by reload style where the gun's kind does not imply it.
 //
 // A style has any of:
 //   gun    [[u, [x, y, z, rx, ry, rz]], ...]   offset of the whole gun from its pose
-//   parts  { mag | bolt | slide | pump | barrels: [[u, [x, y, z, rx, ry, rz, shown]], ...] }
-//          offsets from the part's rest pose, in the gun's frame; `shown` (default 1)
+//   parts  { mag | bolt | slide | pump | barrels | ...: [[u, [x, y, z, rx, ry, rz, shown]], ...] }
+//          (any part a gun has, e.g. the HK21's cover and belt or the Python's ejector)
+//          offsets from the part's rest pose, in the gun's frame (a part riding on
+//          another: in that part's frame); `shown` (default 1)
 //          switches, it does not blend (a magazine vanishes off screen and comes back)
 //   left, right  [[u, place], ...] where each hand is (see HAND_PLACES in viewmodel.js):
 //          'grip' (its hold), 'pocket' (off screen, fetching), or a part name ('mag',
 //          'bolt', ...) to hold that part where it currently is; or [place, [x, y, z]
 //          offset, pose] where place 'at' is a point in the gun's frame and a part's
 //          offset is in that part's frame (so it turns with a crank)
-//   prop   [[u, name | null], ...]   what the left hand carries: 'shell', 'shells', 'clip'
-//   eject  [u, name, count]          spent cases thrown out of the gun at u
+//   prop   [[u, name | null], ...]   what the left hand carries: 'shell', 'shells', 'clip',
+//          'speedloader', 'shell40'
+//   eject  [u, name, count, 'drop'?] spent cases thrown out of the gun at u ('case',
+//          'shell', 'case40'); 'drop' lets them fall instead of flicking them out
 //   emptyOnly  [part, ...]           tracks that only play when the gun ran dry
 //   cues   [[u, sound], ...]         AudioEngine.reload stages
 // Keys blend with smoothstep between neighbours and hold before the first and
@@ -173,6 +178,112 @@ export const RELOADS = {
     ],
     cues: [[0.15, 'jarOut'], [0.61, 'jarIn'], [0.72, 'crank'], [0.8, 'crank'], [0.86, 'charge']],
   },
+
+  // Revolver (Python): roll it over and push the cylinder out on its crane ('mag'),
+  // tip the muzzle up and slap the ejector rod so the six empties fall out, then
+  // muzzle down, a speedloader into the chambers, and flick the cylinder shut.
+  revolver: {
+    gun: [
+      [0, Z6], [0.1, [-0.04, 0.05, 0, 0.25, -0.45, -0.4]], [0.2, [-0.04, 0.055, 0, 0.25, -0.45, -0.4]],
+      [0.27, [-0.04, 0.075, 0.02, 0.85, -0.4, -0.3]], [0.32, [-0.04, 0.075, 0.02, 0.85, -0.4, -0.3]],
+      [0.335, [-0.04, 0.07, 0.02, 0.9, -0.4, -0.3]], [0.37, [-0.04, 0.075, 0.02, 0.85, -0.4, -0.3]],
+      [0.45, [-0.05, 0.035, 0.02, -0.45, -0.45, -0.35]], [0.57, [-0.05, 0.035, 0.02, -0.45, -0.45, -0.35]],
+      [0.59, [-0.05, 0.031, 0.02, -0.48, -0.45, -0.35]], [0.65, [-0.04, 0.045, 0, 0.1, -0.45, -0.4]],
+      [0.71, [-0.03, 0.05, 0, 0.2, -0.35, -0.3]], [0.73, [-0.03, 0.055, 0, 0.25, -0.35, -0.25]], [0.9, Z6],
+    ],
+    parts: {
+      mag: [[0.1, Z6], [0.17, [0, 0, 0, 0, 0, 1.5]], [0.64, [0, 0, 0, 0, 0, 1.5]], [0.71, Z6]],
+      ejector: [[0.28, Z6], [0.33, [0, 0, 0.022, 0, 0, 0]], [0.38, Z6]],
+      rounds: [
+        [0.28, Z6], [0.33, [0, 0, 0.022, 0, 0, 0, 1]], [0.335, [0, 0, 0.022, 0, 0, 0, 0]],
+        [0.56, [0, 0, 0.035, 0, 0, 0, 0]], [0.565, [0, 0, 0.035, 0, 0, 0, 1]], [0.6, [0, 0, 0, 0, 0, 0, 1]],
+      ],
+    },
+    left: [
+      [0, 'grip'], [0.07, 'grip'], [0.12, ['at', [-0.045, 0.047, -0.03], 'side']], [0.17, ['mag', [0.006, 0.056, 0], 'side']],
+      [0.2, ['mag', [0.006, 0.056, 0], 'side']], [0.27, ['mag', [0.008, 0.021, -0.15], 'side']],
+      [0.33, ['mag', [0.008, 0.021, -0.128], 'side']], [0.38, ['mag', [0.008, 0.021, -0.145], 'side']], [0.45, 'pocket'],
+      [0.52, ['mag', [0.008, 0.021, 0.09], 'side']], [0.575, ['mag', [0.008, 0.021, 0.062], 'side']],
+      [0.63, ['mag', [0.006, 0.056, 0], 'side']], [0.71, ['mag', [0.006, 0.056, 0], 'side']], [0.84, 'grip'],
+    ],
+    prop: [[0, null], [0.42, 'speedloader'], [0.575, null]],
+    eject: [0.335, 'case', 6, 'drop'],
+    cues: [[0.14, 'open'], [0.33, 'out'], [0.56, 'clip'], [0.7, 'close']],
+  },
+
+  // Belt-fed (HK21): flip the feed cover up, swap the belt box underneath, lay the
+  // new belt across the feed tray, slam the cover and rack the charging handle.
+  belt: {
+    gun: [
+      [0, Z6], [0.08, [-0.04, 0.035, 0, 0.12, 0.15, -0.35]], [0.46, [-0.04, 0.035, 0, 0.12, 0.15, -0.35]],
+      [0.5, [-0.04, 0.045, 0, 0.16, 0.15, -0.33]], [0.54, [-0.04, 0.035, 0, 0.12, 0.15, -0.35]],
+      [0.72, [-0.04, 0.035, 0, 0.12, 0.15, -0.35]], [0.745, [-0.04, 0.026, 0, 0.1, 0.15, -0.37]],
+      [0.78, [-0.04, 0.035, 0, 0.12, 0.15, -0.35]], [0.86, [-0.03, 0.03, 0, 0.1, 0.1, -0.25]], [1, Z6],
+    ],
+    parts: {
+      cover: [[0.1, Z6], [0.18, [0, 0, 0, 1.25, 0, 0]], [0.66, [0, 0, 0, 1.25, 0, 0]], [0.74, Z6]],
+      mag: [
+        [0.2, Z6], [0.26, [0, -0.025, 0, 0, 0, 0]], [0.34, [-0.08, -0.3, 0.06, 0.3, 0, 0.5, 0]],
+        [0.4, [-0.08, -0.3, 0.06, 0.3, 0, 0.5, 1]], [0.48, [-0.005, -0.03, 0, 0.05, 0, 0.05]], [0.52, Z6],
+      ],
+      belt: [[0.36, Z6], [0.38, [-0.03, 0.02, 0, 0, 0, 0.5]], [0.54, [-0.03, 0.02, 0, 0, 0, 0.5]], [0.62, Z6]],
+      bolt: [[0.8, Z6], [0.85, [0, 0, 0.08, 0, 0, 0]], [0.9, Z6]],
+    },
+    left: [
+      [0, 'grip'], [0.08, 'grip'], [0.13, ['at', [0, 0.12, -0.19], 'over']], [0.19, ['at', [0, 0.225, -0.14], 'over']], [0.22, 'pocket'],
+      [0.25, ['mag', [-0.01, -0.105, 0], 'post']], [0.34, ['mag', [-0.01, -0.105, 0], 'post']], [0.37, 'pocket'],
+      [0.4, ['mag', [-0.01, -0.105, 0], 'post']], [0.52, ['mag', [-0.01, -0.105, 0], 'post']],
+      [0.56, ['mag', [0.012, 0.1, 0.02], 'over']], [0.62, ['mag', [0.012, 0.09, 0.02], 'over']],
+      [0.67, ['at', [0, 0.225, -0.14], 'over']], [0.74, ['at', [0, 0.12, -0.19], 'over']],
+      [0.8, ['bolt', [-0.062, 0.031, -0.406], 'post']], [0.86, ['bolt', [-0.062, 0.031, -0.406], 'post']], [0.95, 'grip'],
+    ],
+    cues: [[0.16, 'open'], [0.25, 'out'], [0.5, 'in'], [0.6, 'clip'], [0.73, 'close'], [0.85, 'bolt']],
+  },
+
+  // Pump-action grenade launcher (China Lake): roll it over, push two fat 40 mm
+  // rounds up and forward into the magazine tube, then rack the pump.
+  launcher: {
+    gun: [
+      [0, Z6], [0.1, [-0.05, 0.065, 0.02, 0.25, -0.15, -0.75]],
+      [0.27, [-0.05, 0.061, 0.024, 0.27, -0.15, -0.75]], [0.31, [-0.05, 0.065, 0.02, 0.25, -0.15, -0.75]],
+      [0.53, [-0.05, 0.061, 0.024, 0.27, -0.15, -0.75]], [0.57, [-0.05, 0.065, 0.02, 0.25, -0.15, -0.75]],
+      [0.74, [-0.05, 0.065, 0.02, 0.25, -0.15, -0.75]], [0.84, [0, -0.01, 0, 0.05, 0, 0]],
+      [0.9, [0, -0.012, 0.025, 0.08, 0, 0]], [1, Z6],
+    ],
+    parts: { pump: [[0.84, Z6], [0.9, [0, 0, 0.12, 0, 0, 0]], [0.96, Z6]] },
+    left: [
+      [0, 'grip'], [0.08, 'grip'], [0.14, 'pocket'], [0.21, ['at', [0, -0.078, 0.0], 'side']],
+      [0.28, ['at', [0, -0.036, -0.07], 'side']], [0.38, 'pocket'], [0.47, ['at', [0, -0.078, 0.0], 'side']],
+      [0.54, ['at', [0, -0.036, -0.07], 'side']], [0.66, 'pocket'], [0.8, 'grip'],
+    ],
+    prop: [[0, null], [0.13, 'shell40'], [0.28, null], [0.39, 'shell40'], [0.54, null]],
+    cues: [[0.18, 'rocket'], [0.44, 'rocket'], [0.9, 'pump']],
+  },
+
+  // Pressure canister (Gale Cannon): twist the spent canister off the breech and
+  // drop it, seat a fresh one, then crank the valve wheel open until the turbine
+  // spins back up.
+  canister: {
+    gun: [
+      [0, Z6], [0.1, [-0.05, 0.05, -0.03, 0.12, 0.2, -0.6]], [0.52, [-0.05, 0.05, -0.03, 0.12, 0.2, -0.6]],
+      [0.56, [-0.045, 0.06, -0.025, 0.18, 0.2, -0.55]], [0.6, [-0.05, 0.05, -0.03, 0.12, 0.2, -0.6]],
+      [0.68, [-0.03, 0.03, 0, 0.1, 0.1, -0.25]], [0.88, [-0.03, 0.03, 0, 0.1, 0.1, -0.25]], [1, Z6],
+    ],
+    parts: {
+      mag: [
+        [0.12, Z6], [0.18, [0, 0, 0, 0, 0, 0.9]], [0.24, [0, -0.03, 0.01, 0, 0, 0.9]],
+        [0.34, [-0.05, -0.3, 0.08, 0.3, 0, 1.2, 0]], [0.42, [-0.05, -0.3, 0.08, 0.3, 0, 1.2, 1]],
+        [0.52, [0, -0.03, 0.01, 0, 0, 0.9]], [0.56, [0, 0, 0, 0, 0, 0.9]], [0.6, Z6],
+      ],
+      bolt: [[0.66, Z6], [0.86, [0, 0, 0, Math.PI * 4, 0, 0]]],
+    },
+    left: [
+      [0, 'grip'], [0.1, 'grip'], [0.16, ['mag', [0, -0.034, 0], 'post']], [0.34, ['mag', [0, -0.034, 0], 'post']],
+      [0.37, 'pocket'], [0.42, ['mag', [0, -0.034, 0], 'post']], [0.6, ['mag', [0, -0.034, 0], 'post']],
+      [0.66, ['bolt', [-0.012, 0.018, 0], 'crank']], [0.86, ['bolt', [-0.012, 0.018, 0], 'crank']], [0.95, 'grip'],
+    ],
+    cues: [[0.19, 'jarOut'], [0.55, 'jarIn'], [0.68, 'crank'], [0.76, 'crank'], [0.84, 'charge']],
+  },
 };
 
 // After-shot cycles, same format plus `dur` (s) and `delay` (s before it starts).
@@ -202,7 +313,31 @@ export const CYCLES = {
     parts: { bolt: [[0.1, Z6], [0.85, [0, 0, 0, Math.PI * 2, 0, 0]]] },
     left: [[0, 'grip'], [0.1, CRANK_HAND], [0.85, CRANK_HAND], [1, 'grip']],
   },
+  // Revolver: the hammer falls with the shot, then cocks again as the cylinder turns
+  // to the next chamber (a sixth of a turn, so it ends where it started).
+  hammer: {
+    dur: 0.3, delay: 0,
+    parts: {
+      hammer: [[0, [0, 0, 0, -0.75, 0, 0]], [0.35, [0, 0, 0, -0.75, 0, 0]], [0.9, Z6]],
+      cylinder: [[0.35, Z6], [0.9, [0, 0, 0, 0, 0, -Math.PI / 3]]],
+    },
+  },
+  // Grenade launcher: a long, heavy pump stroke that throws the fat 40 mm case.
+  launcher: {
+    dur: 0.62, delay: 0.1,
+    gun: [[0, Z6], [0.4, [0, -0.008, 0.012, 0.07, 0, -0.05]], [1, Z6]],
+    parts: { pump: [[0, Z6], [0.4, [0, 0, 0.12, 0, 0, 0]], [0.8, Z6]] },
+    eject: [0.4, 'case40', 1],
+  },
+  // Gale Cannon: the gun heaves as the blast leaves (its turbine whirls meanwhile).
+  gust: {
+    dur: 0.55, delay: 0,
+    gun: [[0, Z6], [0.25, [0, 0.01, 0.02, 0.08, 0, 0.02]], [1, Z6]],
+  },
 };
+
+// Guns whose reload style brings its own after-shot cycle (the rest cycle by kind).
+export const STYLE_CYCLES = { revolver: 'hammer', launcher: 'launcher', canister: 'gust' };
 
 // Sound cues for a style: [[u, stage], ...].
 export function reloadCues(style) {

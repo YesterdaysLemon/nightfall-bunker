@@ -50,6 +50,14 @@ test('party -> match handoff with two players over the origin server', async (t)
   const lobby = await a.wait((m) => m.t === 'lobby' && m.members.length === 2);
   assert.equal(lobby.members[0].host, true);
   assert.equal(lobby.region, 'origin');
+  assert.equal(lobby.map, 'bunker', 'lobbies start on the default map');
+
+  // Only the host picks the map.
+  await b.send({ t: 'map', id: 'palace' });
+  await a.send({ t: 'map', id: 'nowhere' });
+  await a.send({ t: 'map', id: 'palace' });
+  const picked = await b.wait((m) => m.t === 'lobby' && m.map === 'palace');
+  assert.equal(picked.map, 'palace');
 
   // Only the host may start.
   await b.send({ t: 'start' });
@@ -64,6 +72,8 @@ test('party -> match handoff with two players over the origin server', async (t)
   const wa = await ma.wait((m) => m.t === 'welcome');
   const wb = await mb.wait((m) => m.t === 'welcome');
   assert.notEqual(wa.id, wb.id);
+  assert.equal(wa.map, 'palace', 'the match plays the map the lobby picked');
+  assert.equal(go.map, 'palace');
   const snap = await ma.wait((m) => m.t === 's' && m.p.length === 2);
   assert.equal(snap.ph, 'pre');
 
@@ -79,7 +89,7 @@ test('party -> match handoff with two players over the origin server', async (t)
   assert.equal(rej.code, 'full');
 
   // Inputs flow back out in snapshots.
-  await ma.send({ t: 'in', x: -1, y: 0, z: 1.5, yaw: 1, pitch: 0, f: 0 });
+  await ma.send({ t: 'in', x: -1, y: 0, z: 11.5, yaw: 1, pitch: 0, f: 0 });   // a step from the palace spawn
   const moved = await mb.wait((m) => m.t === 's' && m.p.some((r) => r[0] === wa.id && r[1] === -100), 4000, 'moved ' + JSON.stringify(mb.inbox.filter((m) => m.t === 's').pop()?.p.map((r) => r.slice(0, 4))) + ' wa=' + wa.id);
   assert.ok(moved);
 

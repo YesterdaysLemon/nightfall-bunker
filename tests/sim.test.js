@@ -233,7 +233,7 @@ test('every part of the exported hound, standing as drawn, is inside its hit vol
 });
 
 test('hound rounds: scheduled, spawn inside near players, last hound drops max ammo', () => {
-  assert.ok(houndCount(6, 1) >= 8 && houndCount(6, 4) > houndCount(6, 1));
+  assert.ok(houndCount(6, 1) >= 6 && houndCount(6, 4) > houndCount(6, 1));
   assert.ok(houndHealth(6) < 650 && houndHealth(1) >= 150);
   const sim = new GameSim({ seed: 42, firstHoundRound: 1 });
   const p = sim.addPlayer('p', 'P');

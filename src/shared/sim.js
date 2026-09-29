@@ -6,32 +6,36 @@
 
 import { BUNKER } from './map.js';
 import { World, enemyHitTest } from './world.js';
-import { enemy, UNTOUCHABLE } from './enemies.js';
+import { enemy, enemyFor, UNTOUCHABLE } from './enemies.js';
 import { NavGrid } from './nav.js';
 import {
   WEAPONS, BOX_POOL, BOX_COST, WALL_PRICES, START_WEAPON, KNIFE, GRENADE, MAX_PRIMARIES, shotInterval,
 } from './weapons.js';
-import { ZS, ZC, PS, KILL } from './protocol.js';
+import { ZS, ZC, ZF, PS, KILL } from './protocol.js';
 import { POWERUP_TYPES, RANDOM_POWERUPS } from './powerups.js';
 import { mulberry32 as mulberry } from './rng.js';
 import { roundHealth, roundCount } from './rounds.js';
 import { r2, vec3 } from './wire.js';
 import { HOUND_ROUNDS } from './encounters/hounds.js';
 import { KINTSUGI_EGG } from './encounters/kintsugi.js';
+import { MACHINES, perkBits } from './encounters/machines.js';
+import { PERKS, maxHp, perkMult } from './perks.js';
 
 // Kept here for tests and tools that import them from the rules.
 export { roundHealth, roundCount } from './rounds.js';
-export { houndCount, houndHealth } from './encounters/hounds.js';
+export { houndCount, houndHealth, houndCap } from './encounters/hounds.js';
 export { bossHealth } from './encounters/kintsugi.js';
 
 export const TICK = 1 / 20;
 const MAX_ALIVE = 24;
 const START_POINTS = 500;
-const BOX_ROLL = 4.2, BOX_OFFER = 12;
+const BOX_ROLL = 4.2, BOX_OFFER = 12, BOX_FLY = 6;
 // Damage kinds -> the kill event's KILL code.
-const KILL_CODE = { head: KILL.HEAD, explode: KILL.BLAST, nuke: KILL.NUKE, shock: KILL.SHOCK };
-const BLEED_OUT = 30, REVIVE_TIME = 3;
+const KILL_CODE = { head: KILL.HEAD, explode: KILL.BLAST, nuke: KILL.NUKE, shock: KILL.SHOCK, gust: KILL.GUST };
+export const UPGRADED_AMMO = 4500;
+const BLEED_OUT = 30, REVIVE_TIME = 3, SELF_REVIVE = 4;
 const POWERUP_LIFE = 26;
+const STUN_SLOW = 0.35;   // speed while an Arc Pistol blast has an enemy stunned
 // Per-class numbers (speed, melee, hit volumes, points...) live in enemies.js.
 
 // Encounters: special rounds and secrets layered on the core rules. Each is an
@@ -45,12 +49,15 @@ const POWERUP_LIFE = 26;
 //   onDamaged(sim, z), onKill(sim, z, kind) -> true (handled drops)
 //   onBlast(sim, x, y, z, radius, owner), applyPowerup(sim, pu, p) -> true
 //   snapshot(sim, out), welcome(sim, out)  add their fields to what clients get
+export const ENCOUNTERS = { hounds: HOUND_ROUNDS, kintsugi: KINTSUGI_EGG, machines: MACHINES };
 export const DEFAULT_ENCOUNTERS = [HOUND_ROUNDS, KINTSUGI_EGG];
 
 export class GameSim {
-  // map: a map object from map.js (the bunker by default).
-  constructor({ seed = Date.now() & 0xffffffff, solo = false, firstHoundRound = null, map = BUNKER, encounters = DEFAULT_ENCOUNTERS } = {}) {
+  // map: a map object from map.js MAPS (the bunker by default). encounters: the
+  // special rounds and secrets to run (by default the ones the map names).
+  constructor({ seed = Date.now() & 0xffffffff, solo = false, firstHoundRound = null, map = BUNKER, encounters = null } = {}) {
     this.map = map;
+    encounters ??= (map.encounters || []).map((id) => ENCOUNTERS[id]).filter(Boolean);
     this.rng = mulberry(seed);
     this.maxAlive = MAX_ALIVE;
     this.encounters = encounters;
@@ -80,7 +87,10 @@ export class GameSim {
     this.nextPu = 1;
     this.insta = 0;
     this.double = 0;
-    this.box = { state: 'idle', weapon: null, owner: null, t: 0 };
+    // The mystery box. On a map with several spots it moves now and then: after a few
+    // uses a roll can come up empty (a toy instead of a gun, the price refunded) and it
+    // flies off to another spot (map.BOX_SPOTS).
+    this.box = { state: 'idle', weapon: null, owner: null, t: 0, spot: 0, uses: 0 };
     this.grenades = [];
     this.projectiles = [];
     this.arcs = [];         // chain-lightning hops still to land
@@ -105,6 +115,9 @@ export class GameSim {
       weapons: [START_WEAPON], cur: START_WEAPON, grenades: GRENADE.start,
       tokens: 3, lastFire: 0, knifeT: 0, boardPts: 0, repairT: 0, useHeld: false,
       lastIn: this.time,
+      perks: [], selfRevive: 0,
+      away: false,   // riding the teleporter (in the projection booth): zombies ignore them
+      warp: null,    // the server moved them: { x, y, z, until } until their client catches up
     };
     this.players.set(id, p);
     this.emit(['join', id, p.name, slot]);
@@ -155,15 +168,21 @@ export class GameSim {
     if (p.state === PS.DEAD) return;
     const n = (v, d) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
     // Coarse sanity clamp: the client owns movement but cannot teleport.
-    const x = n(m.x, p.x), y = n(m.y, p.y), z = n(m.z, p.z);
+    let x = n(m.x, p.x), y = n(m.y, p.y), z = n(m.z, p.z);
+    // After a teleport, positions from before the client heard about it don't count.
+    if (p.warp) {
+      if (this.time < p.warp.until && Math.hypot(x - p.warp.x, z - p.warp.z) > 1.5) { x = p.x; y = p.y; z = p.z; }
+      else p.warp = null;
+    }
     const dt = Math.max(0.05, this.time - p.lastIn);
     const maxD = 9 * dt + 0.6;
     const d = Math.hypot(x - p.x, z - p.z);
     if (d <= maxD || p.state !== PS.ALIVE) {
       if (p.state === PS.ALIVE || p.state === PS.DOWN) {
-        p.x = Math.max(this.map.IX0 - 0.5, Math.min(this.map.IX1 + 0.5, x));
-        p.z = Math.max(this.map.IZ0 - 0.5, Math.min(this.map.IZ1 + 0.5, z));
-        p.y = Math.max(-0.5, Math.min(this.map.LOFT_Y + 3, y));
+        const [bx0, bz0, bx1, bz1, yMax] = this.map.playBounds;
+        p.x = Math.max(bx0, Math.min(bx1, x));
+        p.z = Math.max(bz0, Math.min(bz1, z));
+        p.y = Math.max(-0.5, Math.min(yMax, y));
       }
     } else {
       p.x += ((x - p.x) / d) * maxD;
@@ -183,7 +202,7 @@ export class GameSim {
   }
 
   takeToken(p, w) {
-    const iv = shotInterval(w);
+    const iv = shotInterval(w) / perkMult(p.perks, 'rateMult');
     p.tokens = Math.min(3, p.tokens + (this.time - p.lastFire) / iv);
     p.lastFire = this.time;
     if (p.tokens < 0.999) return false;
@@ -198,6 +217,7 @@ export class GameSim {
     const o = vec3(m.o), d = vec3(m.d);
     if (o && d) this.emit(['shot', p.id, w, r2(o[0]), r2(o[1]), r2(o[2]), Math.round(d[0] * 1000), Math.round(d[1] * 1000), Math.round(d[2] * 1000)]);
     if (W.chain) return this.fireChain(p, w, W, o, d, m.h);
+    if (W.cone) return this.fireCone(p, w, W, o, d);
     if (!Array.isArray(m.h)) return;
     const maxHits = W.pellets * (1 + (W.penetrate || 0));
     const hits = m.h.slice(0, maxHits);
@@ -238,7 +258,7 @@ export class GameSim {
     }
     const eye = o || [p.x, p.y + 1.6, p.z];
     const pts = eye.map(r2);
-    for (const z of struck) pts.push(r2(z.x), r2(z.y + enemy(z.cls).mid), r2(z.z));
+    for (const z of struck) pts.push(r2(z.x), r2(z.y + this.form(z).mid), r2(z.z));
     if (!struck.length && d) {
       const len = Math.hypot(d[0], d[1], d[2]) || 1;
       const ux = d[0] / len, uy = d[1] / len, uz = d[2] / len;
@@ -252,15 +272,38 @@ export class GameSim {
     });
   }
 
+  // A blast of air (a gun with `cone`): everything the shooter can see within reach
+  // and inside the cone's half-angle is flung away and killed; a boss takes a share.
+  // The rules decide from the shooter's eye and aim; the client just shows the gust.
+  fireCone(p, w, W, o, d) {
+    const C = W.cone;
+    const eye = o && Math.hypot(o[0] - p.x, o[2] - p.z) < 2 ? o : [p.x, p.y + 1.5, p.z];
+    const len = d ? Math.hypot(d[0], d[1], d[2]) : 0;
+    if (!len) return;
+    const ux = d[0] / len, uy = d[1] / len, uz = d[2] / len;
+    const cos = Math.cos(C.angle);
+    for (const z of [...this.zombies.values()]) {
+      if (!this.vulnerable(z)) continue;
+      const my = z.y + this.form(z).mid;
+      const vx = z.x - eye[0], vy = my - eye[1], vz = z.z - eye[2];
+      const dist = Math.hypot(vx, vy, vz);
+      // Point blank always counts; otherwise inside the cone and in sight.
+      if (dist > C.reach || (dist > 1.2 && (vx * ux + vy * uy + vz * uz) / dist < cos)) continue;
+      if (!this.world.lineOfSight(eye[0], eye[1], eye[2], z.x, my, z.z)) continue;
+      const dmg = enemy(z.cls).boss ? C.bossDamage : Math.max(W.damage, z.hp + 1);
+      this.damageZombie(z, dmg, p, 'gust', [vx, 0, vz]);
+    }
+  }
+
   // The closest pair (a struck enemy, a fresh one it can see within reach):
   // { from: index into struck, z }, or null.
   nextHop(struck, reach) {
     let best = null, bd = reach;
     for (const z of this.zombies.values()) {
       if (!this.vulnerable(z) || struck.includes(z)) continue;
-      const zy = z.y + enemy(z.cls).mid;
+      const zy = z.y + this.form(z).mid;
       struck.forEach((at, i) => {
-        const ay = at.y + enemy(at.cls).mid;
+        const ay = at.y + this.form(at).mid;
         const dist = Math.hypot(z.x - at.x, zy - ay, z.z - at.z);
         if (dist >= bd || !this.world.lineOfSight(at.x, ay, at.z, z.x, zy, z.z)) return;
         best = { from: i, z };
@@ -326,7 +369,7 @@ export class GameSim {
   }
 
   onRadio(p) {
-    if (this.time < this.radioT) return;
+    if (!this.map.RADIO || this.time < this.radioT) return;
     if (Math.hypot(p.x - this.map.RADIO.pos[0], p.z - this.map.RADIO.pos[2]) > 2.4 || p.y > 1.5) return;
     this.radioT = this.time + 20;
     this.emit(['radio']);
@@ -363,7 +406,12 @@ export class GameSim {
       const wb = this.map.WALL_BUYS.find((b) => b.id === m.id);
       if (!wb || !this.zones.has(wb.zone) || !near([wb.pos[0], wb.pos[1] - 1.55, wb.pos[2]], 2.0)) return;
       const price = WALL_PRICES[wb.weapon];
-      if (p.weapons.includes(wb.weapon)) {
+      const up = `${wb.weapon}_up`;
+      if (p.weapons.includes(up)) {
+        // Ammo for a Forge-upgraded gun costs the same everywhere.
+        if (!this.spend(p, UPGRADED_AMMO)) return;
+        this.emit(['ammo', p.id, up]);
+      } else if (p.weapons.includes(wb.weapon)) {
         if (!this.spend(p, Math.round(price / 2))) return;
         this.emit(['ammo', p.id, wb.weapon]);
       } else {
@@ -377,19 +425,27 @@ export class GameSim {
       if (!this.spend(p, d.cost)) return;
       this.openDoor(d.id);
     } else if (m.k === 'box') {
-      if (this.box.state !== 'idle' || !this.zones.has(this.map.MYSTERY_BOX.zone) || !near(this.map.MYSTERY_BOX.pos, 2.2)) return;
+      const B = this.boxSpot();
+      if (this.box.state !== 'idle' || !this.zones.has(B.zone) || !near(B.pos, 2.2)) return;
       if (!this.spend(p, BOX_COST)) return;
-      const pool = Object.entries(BOX_POOL).filter(([w]) => !p.weapons.includes(w));
+      const b = this.box;
+      b.uses++;
+      if (this.map.BOX_SPOTS.length > 1 && b.uses >= 4 && this.rng() < Math.min(0.6, 0.12 + (b.uses - 4) * 0.08)) {
+        Object.assign(b, { state: 'leaving', weapon: null, owner: p.id, t: BOX_ROLL });
+        this.emit(['box', 'leave', p.id]);
+        return;
+      }
+      const pool = Object.entries(this.map.BOX_POOL || BOX_POOL).filter(([w]) => !p.weapons.includes(w) && WEAPONS[w]);
       let total = pool.reduce((s, [, n]) => s + n, 0);
       let roll = this.rng() * total, pick = pool[0][0];
       for (const [w, n] of pool) { roll -= n; if (roll <= 0) { pick = w; break; } }
-      this.box = { state: 'rolling', weapon: pick, owner: p.id, t: BOX_ROLL };
+      Object.assign(b, { state: 'rolling', weapon: pick, owner: p.id, t: BOX_ROLL });
       this.emit(['box', 'open', p.id, pick]);
     } else if (m.k === 'boxTake') {
-      if (this.box.state !== 'ready' || this.box.owner !== p.id || !near(this.map.MYSTERY_BOX.pos, 2.4)) return;
+      if (this.box.state !== 'ready' || this.box.owner !== p.id || !near(this.boxSpot().pos, 2.4)) return;
       this.giveWeapon(p, this.box.weapon);
       this.emit(['give', p.id, this.box.weapon, p.weapons.join(',')]);
-      this.box = { state: 'idle', weapon: null, owner: null, t: 0 };
+      Object.assign(this.box, { state: 'idle', weapon: null, owner: null, t: 0 });
       this.emit(['box', 'close']);
     }
   }
@@ -415,6 +471,30 @@ export class GameSim {
   // Can this enemy be hurt right now?
   vulnerable(z) {
     return z.hp > 0 && !UNTOUCHABLE.has(z.state);
+  }
+
+  // An enemy's data in its current condition (a crawler's body is low and slow).
+  form(z) { return enemyFor(z.cls, z.crawl ? ZF.CRAWL : 0); }
+  zflags(z) { return (z.crawl ? ZF.CRAWL : 0) | (z.slowT > 0 ? ZF.STUN : 0); }
+  // How fast it moves right now: an Arc Pistol blast slows it for a few seconds.
+  pace(z) { return z.speed * (z.slowT > 0 ? STUN_SLOW : 1); }
+
+  // A blast that didn't kill. An arc blast stuns (slows) for a few seconds, and a
+  // blast can take a zombie's legs: it crawls from then on. fx: the blast's
+  // projectile (or GRENADE) with optional stun (s) and cripple (chance).
+  afflict(z, fx) {
+    const e = enemy(z.cls);
+    if (fx.stun && !e.stunImmune) z.slowT = Math.max(z.slowT || 0, fx.stun);
+    if (fx.cripple && e.crawl && !z.crawl && z.state !== ZS.RISE && z.state !== ZS.CLIMB && this.rng() < fx.cripple) this.cripple(z);
+  }
+
+  cripple(z) {
+    const C = enemy(z.cls).crawl;
+    z.crawl = true;
+    z.speed = Math.min(z.speed, C.speed[0] + this.rng() * C.speed[1]);
+    if (z.state === ZS.ATTACK) { z.state = ZS.CHASE; z.t = 0; }
+    z.cool = 0.8;   // it hits the floor before it can swing again
+    this.emit(['crip', z.id]);
   }
 
   // Every source of damage (bullets, knife, blasts) comes through here.
@@ -449,7 +529,7 @@ export class GameSim {
 
   maybeDrop(z) {
     if (this.special?.noDrops || this.dropsThisRound >= 4) return;
-    if (z.x < this.map.IX0 + 0.3 || z.x > this.map.IX1 - 0.3 || z.z < this.map.IZ0 + 0.3 || z.z > this.map.IZ1 - 0.3) return;
+    if (this.nav.locateStrict(z.x, z.y, z.z) < 0) return;   // died outside, where nobody can reach
     if (this.rng() > 0.03 + Math.min(0.03, this.killsThisRound * 0.0015)) return;
     const missing = this.windows.some((w) => w.boards < this.map.MAX_BOARDS);
     const types = RANDOM_POWERUPS.filter((t) => !POWERUP_TYPES[t].needsBrokenBoards || missing);
@@ -458,10 +538,9 @@ export class GameSim {
     this.dropsThisRound++;
   }
 
-  // Place a power-up, nudged inside the walls so nobody has to fetch it from a window.
+  // Place a power-up, nudged onto open floor so nobody has to fetch it from a window.
   dropPowerup(type, x, y, z, life = POWERUP_LIFE) {
-    x = Math.max(this.map.IX0 + 0.6, Math.min(this.map.IX1 - 0.6, x));
-    z = Math.max(this.map.IZ0 + 0.6, Math.min(this.map.IZ1 - 0.6, z));
+    [x, y, z] = this.onFloor(x, y, z);
     const pu = { id: this.nextPu++, type, x, y, z, t: life };
     this.powerups.push(pu);
     this.emit(['pu', pu.id, type, r2(pu.x), r2(pu.y), r2(pu.z)]);
@@ -493,6 +572,49 @@ export class GameSim {
     }
   }
 
+  // The nearest open floor (a walkable cell's centre) to a point, within a few metres.
+  onFloor(x, y, z) {
+    const nav = this.nav;
+    let i = nav.cellAt(x, z, y);
+    for (let r = 1; i < 0 && r <= 8; r++) {
+      let bd = Infinity;
+      for (let dz = -r; dz <= r; dz++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
+          const j = nav.cellAt(x + dx * 0.5, z + dz * 0.5, y);
+          if (j >= 0 && dx * dx + dz * dz < bd) { bd = dx * dx + dz * dz; i = j; }
+        }
+      }
+    }
+    if (i < 0) return [x, y, z];
+    const c = nav.center(i);
+    // Keep the exact spot when it is already on open floor.
+    return Math.hypot(c[0] - x, c[2] - z) < 0.36 ? [x, c[1], z] : c;
+  }
+
+  // --- Perks ------------------------------------------------------------------------------
+  givePerk(p, id) {
+    if (!PERKS[id] || p.perks.includes(id)) return;
+    p.perks.push(id);
+    p.hp = Math.min(maxHp(p.perks), p.hp + (PERKS[id].hp ? PERKS[id].hp - 100 : 0));
+    this.emit(['perk', p.id, id, perkBits(p.perks)]);
+  }
+
+  losePerks(p) {
+    if (!p.perks.length) return;
+    p.perks = [];
+    p.hp = Math.min(p.hp, maxHp(p.perks));
+    this.emit(['perk', p.id, '', 0]);
+  }
+
+  // The server moves a player (the teleporter): tell everyone, and hold the spot
+  // until that player's client has heard.
+  warpPlayer(p, [x, y, z, yaw = p.yaw]) {
+    Object.assign(p, { x, y, z, yaw });
+    p.warp = { x, y, z, until: this.time + 3 };
+    this.emit(['warp', p.id, r2(x), r2(y), r2(z), Math.round(yaw * 1000)]);
+  }
+
   hurtPlayer(p, dmg, z) {
     if (p.state !== PS.ALIVE) return;
     p.hp -= dmg;
@@ -502,6 +624,15 @@ export class GameSim {
     p.hp = 0;
     p.downs++;
     const others = this.activePlayers().filter((q) => q !== p && q.state === PS.ALIVE);
+    // Alone with a Lazarus Draught: down for a moment, then back up (it is used up).
+    if (others.length === 0 && p.perks.includes('lazarus') && this.activePlayers().length === 1) {
+      p.state = PS.DOWN;
+      p.selfRevive = SELF_REVIVE;
+      this.losePerks(p);
+      this.emit(['down', p.id]);
+      return;
+    }
+    this.losePerks(p);
     if (others.length === 0) {
       p.state = PS.DOWN;
       this.emit(['down', p.id]);
@@ -549,7 +680,7 @@ export class GameSim {
       if (!p.connected) continue;
       if (p.state === PS.DEAD) {
         const sp = this.map.PLAYER_SPAWNS[p.slot % this.map.PLAYER_SPAWNS.length];
-        Object.assign(p, { state: PS.ALIVE, hp: 100, x: sp[0], y: sp[1], z: sp[2], weapons: [START_WEAPON], cur: START_WEAPON, grenades: GRENADE.start });
+        Object.assign(p, { state: PS.ALIVE, hp: 100, x: sp[0], y: sp[1], z: sp[2], weapons: [START_WEAPON], cur: START_WEAPON, grenades: GRENADE.start, perks: [], away: false });
         this.emit(['respawn', p.id, r2(sp[0]), r2(sp[1]), r2(sp[2])]);
       } else if (this.round > 1) {
         p.grenades = Math.min(GRENADE.max, p.grenades + GRENADE.perRound);
@@ -626,7 +757,7 @@ export class GameSim {
     this.navT -= dt;
     if (this.navT <= 0) {
       this.navT = 0.25;
-      const targets = active.filter((p) => p.state === PS.ALIVE).map((p) => [p.x, p.y, p.z]);
+      const targets = active.filter((p) => p.state === PS.ALIVE && !p.away).map((p) => [p.x, p.y, p.z]);
       this.nav.computeFlow(targets);
     }
     this.stepZombies(dt);
@@ -669,16 +800,26 @@ export class GameSim {
       if (!p.connected) continue;
       if (p.state === PS.ALIVE) {
         alive.push(p);
-        if (p.hp < 100 && this.time - p.hurtT > 2.6) p.hp = Math.min(100, p.hp + 55 * dt);
+        const top = maxHp(p.perks);
+        if (p.hp < top && this.time - p.hurtT > 2.6) p.hp = Math.min(top, p.hp + 55 * dt * (top / 100));
       }
     }
     for (const p of this.players.values()) {
       if (!p.connected || p.state !== PS.DOWN) continue;
-      // Revive: an alive teammate holding use nearby.
+      if (p.selfRevive > 0) {
+        p.selfRevive -= dt;
+        p.revive = (1 - p.selfRevive / SELF_REVIVE) * REVIVE_TIME;   // the HUD shows it as revive progress
+        if (p.selfRevive <= 0) {
+          Object.assign(p, { state: PS.ALIVE, hp: 100, revive: 0, reviver: null, selfRevive: 0 });
+          this.emit(['revived', p.id, p.id]);
+        }
+        continue;
+      }
+      // Revive: an alive teammate holding use nearby (twice as fast with a Lazarus Draught).
       const helper = alive.find((q) => q.useHeld && Math.hypot(q.x - p.x, q.z - p.z) < 1.8 && Math.abs(q.y - p.y) < 1.2);
       if (helper) {
         if (p.reviver !== helper.id) { p.reviver = helper.id; p.revive = 0; }
-        p.revive += dt;
+        p.revive += dt / perkMult(helper.perks, 'reviveMult');
         if (p.revive >= REVIVE_TIME) {
           p.state = PS.ALIVE; p.hp = 100; p.revive = 0; p.reviver = null;
           helper.revives++;
@@ -695,7 +836,9 @@ export class GameSim {
         }
       }
     }
-    if (alive.length === 0 && this.phase !== 'over' && [...this.players.values()].some((p) => p.connected)) {
+    const rising = [...this.players.values()].some((p) => p.connected && p.selfRevive > 0);
+    const standing = [...this.players.values()].some((p) => p.connected && p.state === PS.ALIVE);
+    if (!standing && !rising && this.phase !== 'over' && [...this.players.values()].some((p) => p.connected)) {
       this.gameOver();
       return;
     }
@@ -721,7 +864,7 @@ export class GameSim {
   nearestAlive(x, y, z) {
     let best = null, bd = Infinity;
     for (const p of this.players.values()) {
-      if (!p.connected || p.state !== PS.ALIVE) continue;
+      if (!p.connected || p.state !== PS.ALIVE || p.away) continue;
       const d = Math.hypot(p.x - x, p.z - z) + Math.abs(p.y - y) * 2;
       if (d < bd) { bd = d; best = p; }
     }
@@ -732,6 +875,7 @@ export class GameSim {
     const list = [...this.zombies.values()];
     for (const z of list) {
       z.t -= dt;
+      if (z.slowT > 0) z.slowT = Math.max(0, z.slowT - dt);
       const ai = this.ais[enemy(z.cls).ai];
       if (ai) { ai(this, z, dt); continue; }
       switch (z.state) {
@@ -786,7 +930,7 @@ export class GameSim {
     const [tx, tz] = this.windowSlot(z);
     const dx = tx - z.x, dz = tz - z.z;
     const d = Math.hypot(dx, dz);
-    const sp = z.speed * enemy(z.cls).windowSpeed;
+    const sp = this.pace(z) * enemy(z.cls).windowSpeed;
     if (d > 0.08) {
       const s = Math.min(d, sp * dt);
       z.x += (dx / d) * s; z.z += (dz / d) * s;
@@ -820,7 +964,7 @@ export class GameSim {
       z.tear -= dt;
       if (z.tear <= 0) {
         ws.boards--;
-        z.tear = E.tearTime;
+        z.tear = E.tearTime * (z.crawl ? 1.3 : 1) * (z.slowT > 0 ? 1.6 : 1);
         this.emit(['board', W.id, ws.boards, 0]);
       }
       return;
@@ -862,7 +1006,7 @@ export class GameSim {
     else if (ok(z.x, nz)) z.z = nz;
     else moved = false;
     // Keep bodies out of walls and furniture.
-    const [radius, bottom, top] = enemy(z.cls).body;
+    const [radius, bottom, top] = this.form(z).body;
     const p = this.world._pushOut(z.x, z.z, z.y + bottom, z.y + top, radius);
     if (p && ok(p[0], p[1])) { z.x = p[0]; z.z = p[1]; }
     return moved;
@@ -874,7 +1018,7 @@ export class GameSim {
     const nav = this.nav;
     const cell = nav.locate(z.x, z.y, z.z);
     let tx = p.x, tz = p.z;
-    const E = enemy(z.cls);
+    const E = this.form(z);
     const direct = pd < E.directDist && Math.abs(p.y - z.y) < 0.8;
     if (!direct && cell >= 0) {
       const n1 = nav.next(cell);
@@ -887,14 +1031,14 @@ export class GameSim {
     const dx = tx - z.x, dz = tz - z.z;
     const d = Math.hypot(dx, dz);
     if (d > 0.02) {
-      const s = Math.min(d, z.speed * dt);
+      const s = Math.min(d, this.pace(z) * dt);
       if (!this.tryMove(z, (dx / d) * s, (dz / d) * s)) z.stuck += dt; else z.stuck = 0;
       z.yaw = turnToward(z.yaw, Math.atan2(dx, dz), dt * E.turn);
     }
     // Height follows the floor: stairs are a smooth ramp.
     const sh = this.map.stairHeightAt(z.x, z.z);
     const ci = nav.locate(z.x, z.y, z.z);
-    if (sh !== null && ci >= 0 && nav.levelOf(ci) === 0) z.y = sh;
+    if (sh !== null && ci >= 0 && Math.abs(sh - nav.height[ci]) < 0.6) z.y = sh;
     else if (ci >= 0) z.y = nav.height[ci];
     if (z.stuck > 3) { // unstick by nudging to the current cell centre
       const c = ci >= 0 ? nav.center(ci) : null;
@@ -905,20 +1049,20 @@ export class GameSim {
     const M = E.melee;
     if (z.cool <= 0 && Math.hypot(p.x - z.x, p.z - z.z) < M.start && Math.abs(p.y - z.y) < 1.2) {
       z.state = ZS.ATTACK;
-      z.t = M.windup;
+      z.t = M.windup * (z.slowT > 0 ? 1.5 : 1);
       z.atkTarget = p.id;
       this.emit(['zatk', z.id]);
     }
   }
 
   zAttack(z, dt) {
-    const E = enemy(z.cls), M = E.melee;
+    const E = this.form(z), M = E.melee;
     const p = this.players.get(z.atkTarget);
     if (p) z.yaw = turnToward(z.yaw, Math.atan2(p.x - z.x, p.z - z.z), dt * 8);
     // Leapers (hounds) close the gap during the wind-up.
     if (E.leap && p && z.t > 0) {
       const dx = p.x - z.x, dz = p.z - z.z, d = Math.hypot(dx, dz);
-      const s = Math.min(d - 0.7, z.speed * E.leap * dt);
+      const s = Math.min(d - 0.7, this.pace(z) * E.leap * dt);
       if (d > 0.7) this.tryMove(z, (dx / d) * s, (dz / d) * s);
     }
     if (z.t > 0) return;
@@ -960,7 +1104,7 @@ export class GameSim {
       let hitT = this.world.raycast(pr.x, pr.y, pr.z, dx, dy, dz, step);
       for (const z of this.zombies.values()) {
         if ((z.state === ZS.RISE && z.t > 0.8) || !this.vulnerable(z)) continue;
-        const h = enemyHitTest(z.cls, pr.x, pr.y, pr.z, dx, dy, dz, z.x, z.y, z.z, z.yaw, hitT);
+        const h = enemyHitTest(z.cls, pr.x, pr.y, pr.z, dx, dy, dz, z.x, z.y, z.z, z.yaw, hitT, this.zflags(z));
         if (h) hitT = h.t;
       }
       if (hitT < step || pr.t > 4) {
@@ -976,15 +1120,17 @@ export class GameSim {
   explode(x, y, z, radius, damage, owner, kind, projId = 0) {
     this.emit(['boom', r2(x), r2(y), r2(z), kind, projId]);
     for (const e of this.encounters) e.onBlast?.(this, x, y, z, radius, owner);
+    const fx = kind === 'nade' ? GRENADE : WEAPONS[kind]?.projectile;
     for (const zb of [...this.zombies.values()]) {
       if (!this.vulnerable(zb)) continue;
-      const e = enemy(zb.cls);
+      const e = this.form(zb);
       const d = Math.hypot(zb.x - x, zb.y + e.mid - y, zb.z - z);
       if (d > radius) continue;
       if (!this.world.lineOfSight(x, y, z, zb.x, zb.y + e.mid, zb.z) && d > 1.2) continue;
       // Falls off to 40% at the edge; some enemies (porcelain) only take part of it.
       const dmg = damage * (1 - (d / radius) * 0.6) * (e.splash ?? 1);
       this.damageZombie(zb, dmg, owner, 'explode', [zb.x - x, 0, zb.z - z]);
+      if (zb.hp > 0 && fx) this.afflict(zb, fx);
     }
   }
 
@@ -1004,6 +1150,8 @@ export class GameSim {
     }
   }
 
+  boxSpot() { return this.map.BOX_SPOTS[this.box.spot] || this.map.BOX_SPOTS[0]; }
+
   stepBox(dt) {
     const b = this.box;
     if (b.state === 'idle') return;
@@ -1012,8 +1160,20 @@ export class GameSim {
       b.state = 'ready'; b.t = BOX_OFFER;
       this.emit(['box', 'ready', b.owner, b.weapon]);
     } else if (b.state === 'ready' && b.t <= 0) {
-      this.box = { state: 'idle', weapon: null, owner: null, t: 0 };
+      Object.assign(b, { state: 'idle', weapon: null, owner: null, t: 0 });
       this.emit(['box', 'close']);
+    } else if (b.state === 'leaving' && b.t <= 0) {
+      // The toy showed; refund the roll and send the box up and away.
+      const p = this.players.get(b.owner);
+      if (p) { p.points += BOX_COST; this.emit(['pts', p.id, BOX_COST, p.points, 0]); }
+      Object.assign(b, { state: 'moving', owner: null, t: BOX_FLY });
+      this.emit(['box', 'fly']);
+    } else if (b.state === 'moving' && b.t <= 0) {
+      const n = this.map.BOX_SPOTS.length;
+      let next = Math.floor(this.rng() * (n - 1));
+      if (next >= b.spot) next++;
+      Object.assign(b, { state: 'idle', spot: next, uses: 0, t: 0 });
+      this.emit(['box', 'move', next]);
     }
   }
 
@@ -1031,14 +1191,17 @@ export class GameSim {
     const z = [];
     for (const q of this.zombies.values()) {
       const lift = q.state === ZS.RISE ? -Math.max(0, q.t) / (q.ladder ? 1.2 : 1.7) : 0;
-      z.push([q.id, r2(q.x), r2(q.y + lift * 1.7), r2(q.z), Math.round(q.yaw * 1000), q.state, q.cls]);
+      const row = [q.id, r2(q.x), r2(q.y + lift * 1.7), r2(q.z), Math.round(q.yaw * 1000), q.state, q.cls];
+      const f = this.zflags(q);
+      if (f) row.push(f);   // condition bits (ZF), only when there are any
+      z.push(row);
     }
     const p = [];
     for (const q of this.players.values()) {
       if (!q.connected) continue;
       p.push([q.id, r2(q.x), r2(q.y), r2(q.z), Math.round(q.yaw * 1000), Math.round(q.pitch * 1000),
         Math.round(q.hp), q.state, q.cur, q.points, q.flags, Math.round((q.revive / REVIVE_TIME) * 100), Math.round(q.bleed),
-        q.kills, q.headshots, q.downs, q.revives, q.slot, q.grenades]);
+        q.kills, q.headshots, q.downs, q.revives, q.slot, q.grenades, perkBits(q.perks)]);
     }
     const out = {
       t: 's', k: this.tick, r: this.round, ph: this.phase, pt: Math.max(0, Math.round(this.phaseT * 10) / 10),
@@ -1052,10 +1215,10 @@ export class GameSim {
   welcome(id) {
     const p = this.players.get(id);
     const out = {
-      t: 'welcome', id, round: this.round, phase: this.phase,
+      t: 'welcome', id, map: this.map.id, round: this.round, phase: this.phase,
       doors: [...this.openDoors],
       boards: this.windows.map((w) => w.boards),
-      box: { state: this.box.state, weapon: this.box.weapon, owner: this.box.owner },
+      box: { state: this.box.state, weapon: this.box.weapon, owner: this.box.owner, spot: this.box.spot },
       powerups: this.powerups.map((u) => [u.id, u.type, r2(u.x), r2(u.y), r2(u.z)]),
       players: [...this.players.values()].map((q) => [q.id, q.name, q.slot]),
       me: p && { x: p.x, y: p.y, z: p.z, yaw: p.yaw, weapons: p.weapons, cur: p.cur, points: p.points, grenades: p.grenades, state: p.state, hp: p.hp },

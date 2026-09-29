@@ -22,9 +22,9 @@ export function sessionToken() {
 }
 
 export class LocalConnection {
-  constructor() {
+  constructor(map) {
     this.kind = 'local';
-    this.room = new MatchRoom({ id: 'solo', region: 'local' });
+    this.room = new MatchRoom({ id: 'solo', region: 'local', map });
     this.sock = { send: (s) => this.onmessage?.(JSON.parse(s)), close: () => {} };
     this.room.open(this.sock);
     this.paused = false;

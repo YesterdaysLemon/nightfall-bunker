@@ -30,18 +30,24 @@ and Leyden Rifle.
 ## Layout
 
 `docs/EXTENDING.md` has the recipes for adding an enemy, gun, power-up,
-encounter, setting or map, and for re-theming. Content is data in registries,
+encounter, setting, map, perk or machine, and for re-theming. Content is data in registries,
 and the tests check each registry is complete.
 
 - `src/shared/` — the runtime-agnostic game core, used by the browser, the Worker and Node:
   - `sim.js`: the authoritative rules. Special content plugs in as encounters (hooks listed at its top).
-  - `encounters/`: `hounds.js` (hound rounds) and `kintsugi.js` (the easter egg and boss).
-  - `enemies.js`: per-class data (hit volumes, speeds, melee, AI, look).
-  - `weapons.js`: each gun's price, box weight, grip, reload and projectile.
-  - `powerups.js`.
-  - `map.js`: the bunker's level data, also as one `BUNKER` object in `MAPS`.
+  - `encounters/`: `hounds.js` (hound rounds), `kintsugi.js` (the easter egg and
+    boss) and `machines.js` (power, perks, the Forge, the teleporter, traps).
+  - `enemies.js`: per-class data (hit volumes, speeds, melee, AI, look), and the
+    crawler variant (`enemyFor(cls, flags)`).
+  - `weapons.js`: each gun's price, box weight, grip, reload and projectile, and the
+    Forge's upgrades (`UPGRADES`, generated as `<id>_up`).
+  - `perks.js`, `powerups.js`.
+  - `map.js`: the bunker (`BUNKER`) and the map registry (`MAPS`, `mapById`);
+    `maps/palace.js`: the Aurora Picture Palace; `mapkit.js`: map building blocks
+    and `defineMap`.
   - `world.js`: AABB collision, raycasts, data-driven hit volumes.
-  - `nav.js`: a two-level grid and flow field.
+  - `nav.js`: one grid layer per floor (`map.NAV_LEVELS`), floors read from the
+    boxes, stairs joining them, and a flow field.
   - Rules, world and nav all take a map. Also `rounds.js`, `rng.js` (the one
     seeded generator), `wire.js` and `protocol.js`.
 - `src/net/rooms.js` — transport-agnostic `MatchRoom` / `PartyRoom`.
@@ -51,6 +57,10 @@ and the tests check each registry is complete.
   - `enemy-looks.js`: each enemy family's sounds and effects.
   - `text.js`: the words players read.
   - `settings.js` / `settings-ui.js`: settings, key bindings and the settings sheet.
+  - `render/level.js`: what every map shares (boards, doors, wall buys, the box);
+    `render/maps/`: each map's dressing (`bunker.js`, `palace.js`).
+  - `render/machines.js` (machine models), `render/machine-props.js` (placing and
+    driving them), `perk-icons.js`; `render/guns/` (the Cold War guns' models).
 - `worker/index.js` — Cloudflare Worker + Durable Objects (`Party`, `Match`,
   `Beacon`, `Directory`) serving `/net/*` on the game hostname.
 - `server/index.mjs` — VPS container: static `dist/`, `/healthz`, and an
@@ -62,10 +72,12 @@ and the tests check each registry is complete.
   use a separate RNG stream (`houndRng`), so zombie randomness never shifts.
   - Fog rolls in and the bulbs dim.
   - Hounds warp in on a lightning strike on the target player's floor, in an
-    unlocked zone 4.5–10 m from a player, with at most 2 + 2 × players alive at
-    once.
+    unlocked zone 4.5–10 m from a player.
+  - A few at a time (`houndCap`): two loose at once on the first hound round, one
+    more each later hound round (up to six), plus one per extra player. The spawn
+    clock only runs below the cap, so a kill buys 2.5–4 s before the next.
   - They bite for 25, die in a few shots, and burst into flame.
-  - They are drawn at `HOUND_SCALE` (1.3, `enemies.js`) times the model. Their hit
+  - They are drawn at `HOUND_SCALE` (1.5, `enemies.js`) times the model. Their hit
     volumes (skull, snout, ears, body, legs) scale with it and are padded to be
     forgiving; a test keeps every vertex of the standing model inside them.
     Aim assist, splash and the spawn and death effects use `HOUND_MID`.
@@ -82,9 +94,58 @@ and the tests check each registry is complete.
     takes half splash damage.
   - Killing her drops Gold Leaf: the Arc Pistol for the grabber, and +1000
     points and full grenades for everyone.
+- **Crawlers and stuns.** A blast that doesn't kill can take a window zombie's legs
+  (`projectile.cripple`: grenades 30%, rockets 35%, China Lake 40%, Arc Pistol 50%).
+  It crawls from then on: prone, slow, a low target (its own hit volumes; head
+  shots aim low), still biting. The Arc Pistol's blast also stuns (`stun`, 3.5 s at
+  a third of the speed) whatever it doesn't kill; the boss shrugs it off.
+  - The snapshot's optional 8th zombie column carries `ZF` bits (crawl, stun);
+    `['crip', id]` plays the blood. `scripts/combat-smoke.mjs` checks it in the client.
 - Enemy classes and states live in `protocol.js` (`ZC`, `ZS`), and their data in
   `enemies.js`. Client renderers: `render/hounds.js`, `render/kintsugi.js`,
   and `render/egg.js` for the props.
+
+## The Aurora Picture Palace (the second map)
+
+A playstyle homage to the classic theatre map, with every name original. Data:
+`src/shared/maps/palace.js`; dressing: `src/client/render/maps/palace.js`.
+
+- **Layout.** Foyer (start) -> 750 debris -> Stair Hall -> stairs -> 1000 door ->
+  Dressing Rooms (upper floor) -> 1000 debris -> the stage wing. Or Foyer -> 750 ->
+  Box Office -> 1000 -> the Alley (open sky) -> 1000 side door -> the Auditorium.
+  Stage -> 750 (either door) -> Backstage. The Projection Booth is teleport only.
+  Floors: ground, stage 1.2, dressing rooms 3.6, booth 7.2.
+- **Power** (`POWER`, backstage): the Main Breaker. Until it's thrown the machines
+  are dark and lamps marked `power` stay off.
+- **Perks** (`src/shared/perks.js`, lost when you go down):
+  - Ironclad Tonic 2500 (250 health), Lazarus Draught 1500 (revive teammates twice
+    as fast; alone 500 and it gets you back up, three times), Quicksilver Cola 3000
+    (reload in half the time), Hair Trigger Stout 2000 (a third faster fire).
+  - Machines: foyer, dressing rooms, alley, auditorium. Their jingles play now and then.
+- **The Forge** (5000, behind the stage's curtain): takes the gun in your hands
+  (you must carry a second) and gives back its `_up` version: a new name, the
+  Forge's ember camo, double damage, more ammo. Upgraded ammo from a wall costs 4500.
+- **The Magic Lantern** (`TELEPORT`): pull a pad's lever (dressing rooms or alley),
+  link it at the lantern on stage within 30 s, then stand on the pad and pay 1500:
+  everyone on it spends 30 s in the booth (zombies ignore them) and comes back on
+  the stage. The first ride opens the curtain on the Forge. Pads re-link after a
+  30 s cooldown. Server moves a player with `['warp', ...]`; the client's stale
+  positions are ignored until it catches up (`p.warp`).
+- **Spark Gates** (`TRAPS`, 1000): 25 s of arcs across a doorway (dressing rooms,
+  alley) that fry zombies and burn players, then 40 s to cool.
+- **The box moves** between seven spots (`BOX_SPOTS`): after four rolls a roll can
+  show a plush rabbit instead, refund, and fly off to another spot.
+- **Guns:** its box (`BOX_POOL`) has the Cold War guns (Galil, HK21, Dragunov,
+  Python, China Lake, AK-74u, MP5K, SPAS-12, M14) and the Gale Cannon; the Leyden
+  Rifle stays in the bunker. Hound rounds come here too; the Kintsugi egg doesn't.
+- **Rendering.** The dressing (`render/maps/palace/`) bakes light per room and splits
+  its geometry into chunks by room; a portal culler (`zones.js`, `chunks.js`) draws
+  only the rooms the camera can see through openings, and hides the machines out of
+  sight (`culler.sees`). `tests/palace-visibility.test.js` (`scripts/palace-visibility.mjs`)
+  brute-forces random camera poses to prove it hides nothing visible. Its geometry and
+  texture pages are built once and reused when the map comes back.
+  `scripts/palace-tour.mjs` flies a camera through every room and prints draw calls and
+  triangles (`--nocull` for comparison).
 
 ## Guns
 
@@ -96,6 +157,13 @@ and the tests check each registry is complete.
     which takes `bossDamage`. Kills are `KILL.SHOCK`: the body fries, then drops.
   - The `chain` event carries the whole path. Three jars hold three shots and go
     dark as they are spent; reloading swaps the jar rack and cranks it up.
+- **Gale Cannon** (`galecannon`, palace box): a blast of air (`cone`): everything in
+  sight within `reach` and the cone's half-angle is flung and killed (`KILL.GUST`); a
+  boss takes `bossDamage`. The client draws the gust (`fx.gust`) and flings the bodies.
+- **The Forge's upgrades** (`UPGRADES` in `weapons.js`): `<id>_up` copies with double
+  damage, a bigger magazine, twice the reserve; the M1911's (Brimstone) fires
+  explosive rounds. Drawn with the Forge camo (`weapons3d.js` `camoOf`), and the
+  shot sound gets an upgrade layer.
 - **Animation:** `render/reloads.js` holds every reload style and after-shot cycle
   as keyframes over progress, played by `render/viewmodel.js`.
   - Styles: mag, pistol, stripper-clip bolt, shell-by-shell pump, break action,
@@ -133,6 +201,12 @@ and the tests check each registry is complete.
   own their movement (speed-clamped) and claim hits, validated for range, rate
   and weapon ownership. Snapshots are compact JSON with events piggybacked.
 - Solo runs the real `MatchRoom` in the page (no server needed).
+- **Maps:** the menu's map picker sets solo's map and the map a lobby you create
+  starts on; in a lobby the host picks (`{ t: 'map' }`). The party passes it to
+  `createMatch(region, { code, map })` (Worker: stored with the match; Node: the
+  room), and `welcome.map` tells clients, which build it (`Game.setMap`).
+- `PROTOCOL` is 4: zombie condition bits, the player's perk bits (row index 19),
+  the map in the welcome, and the machine events.
 - Lobby placement: each player times round trips to a Durable Object beacon
   pinned in every location hint; on start the party creates the match object
   with the `locationHint` that minimises the worst player's latency.
@@ -177,6 +251,15 @@ and the tests check each registry is complete.
     (`output/guns/reloads.png`)
   - the Leyden Rifle firing down a row of zombies: the chain must kill them all
     and a spent jar must go dark.
+- `npm run palace-smoke` — headless, muted, on the palace: picks the map in the
+  menu, throws the breaker, buys a perk, rides the Magic Lantern to the booth and
+  back, forges a gun, runs a Spark Gate and fires the Gale Cannon. Screenshots:
+  `output/palace/`.
+- `npm run combat-smoke` — headless, muted: crawlers and stuns in the client (a
+  crawler's raised head is a headshot, a head-high shot passes over it), a grenade
+  leaving crawlers, and the hound's size. `--debug` draws the hit volumes.
+- `node scripts/machines-sheet.mjs` — a contact sheet of every machine model in each
+  state (`output/machines/`), no build needed.
 - `node scripts/mp-smoke.mjs --url <site>` — two headless browsers create and
   join a lobby, start a match and check they see each other (works on prod).
 - `npm run build:worker` — bundles the Worker to `dist-worker/index.js`.
@@ -196,9 +279,15 @@ and the tests check each registry is complete.
     - `mended` (`z_mended.py`): a mechanic with Kintsugi's gold-mended porcelain.
     - `stoker` (`z_stoker.py`): an ember-cracked brute.
     - `gasser` (`z_gasser.py`): a gas-mask runner in the Rotted style's green.
+    - The palace's locals (`art/zombies/horde97.py`, a shared toolkit drawn out of
+      the Mended's script): `usher` (`z_usher.py`: maroon usher's uniform, pillbox
+      cap, torch) and `projectionist` (`z_projectionist.py`: cardigan, eyeshade,
+      glowing glasses, film strip).
     - `render/zombie-models.js` weights each per class (Mended mostly walk,
-      Stoker jog, Gasser run). The pick comes from the zombie's id, so it is
-      cosmetic and every client agrees.
+      Stoker jog, Gasser run) and per map (`maps`: the bunker has Mended and Gasser,
+      the palace Usher and Projectionist; Ghoul and Stoker walk both). Models marked
+      `later` load after the menu. The pick comes from the zombie's id and the map,
+      so it is cosmetic and every client agrees (`tests/horde.test.js`).
     - Glow pages light the seams, embers and eyes. Model meta names the parts
       that go with the head on a headshot.
   - `hound`: `z_hound.py`, used by `hounds.js`.
@@ -321,6 +410,6 @@ Measured on 2026-09-27 (cold start, this PC's GPU): the menu's first frames went
 ## Acceptance
 
 - `npm test` and `npm run check` pass; `npm run smoke` clears round 1 with no
-  console errors.
+  console errors; `npm run palace-smoke` and `npm run combat-smoke` pass.
 - Live: `/healthz` SHA matches the deployed commit; `/net/health` answers from
   the edge; a two-browser lobby reaches a match.

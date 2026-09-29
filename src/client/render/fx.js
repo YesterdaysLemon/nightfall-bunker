@@ -2,7 +2,6 @@
 // grenades and power-ups. Nothing here allocates per frame.
 
 import * as THREE from 'three';
-import { LIGHTS } from '../../shared/map.js';
 import { stepBody } from '../../shared/sim.js';
 import { WEAPONS } from '../../shared/weapons.js';
 import { HOUND_SCALE as HS, HOUND_MID } from '../../shared/enemies.js';
@@ -200,7 +199,7 @@ export class FX {
     this.powerups = new Map();
     this.flashes = [];
     this.time = 0;
-    this.fireAt = LIGHTS.filter((l) => l.fire).map((l) => new THREE.Vector3(...l.pos));
+    this.fireAt = [];   // setMap: the map's open fires (embers drift from them)
     this.shake = 0;
     this.orbMat = new THREE.MeshBasicMaterial({ color: 0x9ffcff });
     this.rocketMat = new THREE.MeshLambertMaterial({ color: 0x3d4430 });
@@ -426,6 +425,40 @@ export class FX {
       }
     }
     this.rig.explosionFlash(new THREE.Vector3(x, y + 0.5, z));
+  }
+
+  // The Gale Cannon's blast of air: a cone of pale streaks and dust off the muzzle.
+  gust(from, dir, reach = 11, angle = 0.5) {
+    const d = dir.clone ? dir.clone().normalize() : new THREE.Vector3(dir[0], dir[1], dir[2]).normalize();
+    const side = new THREE.Vector3().crossVectors(d, Math.abs(d.y) > 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0)).normalize();
+    const up = new THREE.Vector3().crossVectors(side, d);
+    const v = new THREE.Vector3();
+    for (let i = 0; i < 110; i++) {
+      const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * Math.tan(angle);
+      v.copy(d).addScaledVector(side, Math.cos(a) * r).addScaledVector(up, Math.sin(a) * r).normalize();
+      const sp = reach * (1.6 + Math.random() * 1.4);
+      const o = 0.2 + Math.random() * 0.6;
+      this.alpha.emit(from.x + v.x * o, from.y + v.y * o, from.z + v.z * o, v.x * sp, v.y * sp, v.z * sp,
+        0.78, 0.8, 0.84, 0.08 + Math.random() * 0.1, 0.05 + Math.random() * 0.07, 0.3 + Math.random() * 0.25, 0, 2.6, 1.4);
+    }
+    for (let i = 0; i < 24; i++) {
+      const a = Math.random() * Math.PI * 2, r = Math.random() * Math.tan(angle) * 0.6;
+      v.copy(d).addScaledVector(side, Math.cos(a) * r).addScaledVector(up, Math.sin(a) * r).normalize();
+      const sp = 10 + Math.random() * 14;
+      this.add.emit(from.x, from.y, from.z, v.x * sp, v.y * sp, v.z * sp, 0.85, 0.9, 1, 0.8, 0.03, 0.3 + Math.random() * 0.2, 0, 2.5);
+    }
+    // Dust kicked off the floor along the blast.
+    const n = [0, 0, 0];
+    for (let k = 2; k < reach; k += 1.6) {
+      const px = from.x + d.x * k, pz = from.z + d.z * k, py = from.y + d.y * k;
+      const t = this.world.raycast(px, py, pz, 0, -1, 0, 3, n);
+      if (t >= 3) continue;
+      for (let i = 0; i < 4; i++) {
+        this.alpha.emit(px + (Math.random() - 0.5) * k * 0.4, py - t + 0.05, pz + (Math.random() - 0.5) * k * 0.4,
+          d.x * 6 + (Math.random() - 0.5) * 2, 0.8 + Math.random(), d.z * 6 + (Math.random() - 0.5) * 2,
+          0.3, 0.27, 0.23, 0.5, 0.3 + Math.random() * 0.3, 0.9 + Math.random() * 0.6, -0.2, 2, 1.4);
+      }
+    }
   }
 
   // --- Grenades ----------------------------------------------------------------------

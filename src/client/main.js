@@ -3,7 +3,10 @@
 import { Game } from './game.js';
 import { LocalConnection, WsConnection, lobbyApi, sessionToken } from './net.js';
 import { PROTOCOL, REGIONS, MAX_PLAYERS, PLAYER_COLORS } from '../shared/protocol.js';
+import * as THREE from 'three';
 import { WEAPONS, reloadStyle } from '../shared/weapons.js';
+import { enemyFor } from '../shared/enemies.js';
+import { MAPS, mapById } from '../shared/map.js';
 import { escapeHtml } from './hud.js';
 import { TouchControls } from './touch.js';
 import { loadModels } from './render/models.js';
@@ -28,8 +31,11 @@ const token = sessionToken();
 // procedural art). The menu waits only for the horde. Hounds (round 5 on), the
 // Kintsugi set (the easter egg) and other players' avatar load alongside and are
 // swapped in when they arrive (Game.useModels).
-const later = loadModels(['hound', 'kintsugi', 'survivor'], '/models/', MODEL_VERSIONS);
-const models = await loadModels(Object.keys(ZOMBIE_MODELS), '/models/', MODEL_VERSIONS);
+// The menu waits for the common horde; hounds, the Kintsugi set, the survivor avatar
+// and a map's own locals (ZOMBIE_MODELS `later`) arrive behind it.
+const lateHorde = Object.keys(ZOMBIE_MODELS).filter((id) => ZOMBIE_MODELS[id].later);
+const later = loadModels(['hound', 'kintsugi', 'survivor', ...lateHorde], '/models/', MODEL_VERSIONS);
+const models = await loadModels(Object.keys(ZOMBIE_MODELS).filter((id) => !ZOMBIE_MODELS[id].later), '/models/', MODEL_VERSIONS);
 
 let game;
 try {
@@ -48,6 +54,7 @@ later.then((m) => setTimeout(() => game.useModels(m), 0));
 const devBuild = import.meta.env.DEV || params.has('test');
 if (devBuild) window.__game = game;
 if (devBuild) window.__weapons = { WEAPONS, reloadStyle };
+if (devBuild) window.__dev = { THREE, enemyFor };   // smoke scripts draw debug shapes with these
 // Automated runs must never request pointer lock: headless Chromium on Windows
 // implements it by clipping the real system cursor to its invisible window.
 if (params.has('test')) game.input.fallback = true;
@@ -74,6 +81,27 @@ if (coarse || params.has('touch')) {
 addEventListener('pointerdown', (e) => { if (e.pointerType === 'touch') enableTouch(); }, { capture: true, passive: true });
 
 // --- Settings ---------------------------------------------------------------------------
+// The map: solo plays it, and a lobby you create starts on it. The menu shows it behind.
+function mapButtons(el, current, onPick, enabled = true) {
+  el.replaceChildren(...Object.values(MAPS).map((m) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.setAttribute('role', 'radio');
+    b.setAttribute('aria-checked', String(m.id === current));
+    b.disabled = !enabled;
+    b.innerHTML = `<b>${escapeHtml(m.name)}</b><small>${escapeHtml(m.blurb || '')}</small>`;
+    b.onclick = () => onPick(m.id);
+    return b;
+  }));
+}
+function pickMap(id) {
+  settings.map = mapById(id).id;
+  saveSettings(settings);
+  mapButtons($('mapPick'), settings.map, pickMap);
+  if (game.mode === 'menu') game.setMap(settings.map);
+}
+mapButtons($('mapPick'), mapById(settings.map).id, pickMap);
+
 const nameInput = $('nameInput');
 nameInput.value = settings.name;
 settings.gyro = false; // the motion permission is asked for again each visit
@@ -226,7 +254,8 @@ $('btnSolo').onclick = () => {
   unlockAudio();
   $('mainError').textContent = '';
   session = { kind: 'solo' };
-  game.start(new LocalConnection(), { name: settings.name, token, local: true });
+  const map = mapById(settings.map).id;
+  game.start(new LocalConnection(map), { name: settings.name, token, local: true, map });
   const give = params.get('give');
   if (devBuild && WEAPONS[give]) devGive(give);
 };
@@ -285,7 +314,7 @@ async function openParty(code) {
       $('lobbyError').textContent = 'Lobby connection closed.';
     }
   };
-  party.send({ t: 'hello', v: PROTOCOL, token, name: settings.name, pings, back: session.backFrom });
+  party.send({ t: 'hello', v: PROTOCOL, token, name: settings.name, pings, back: session.backFrom, map: mapById(settings.map).id });
   history.replaceState(null, '', `#${code}`);
   ensurePings().then((p) => party.send({ t: 'pings', pings: p })).catch(() => {
     $('regionInfo').textContent = 'Could not measure server distance; using defaults.';
@@ -303,6 +332,8 @@ function onPartyMessage(m) {
     renderProbes(m.region);
     const me = m.members.find((x) => x.id === token.slice(0, 6));
     $('btnStart').disabled = !(me && me.host) || m.state !== 'waiting';
+    // The host picks the map; everyone sees it.
+    mapButtons($('lobbyMap'), mapById(m.map).id, (id) => session?.party?.send({ t: 'map', id }), !!(me && me.host) && m.state === 'waiting');
     $('btnStart').textContent = m.state === 'ingame' ? 'Match in progress' : me?.host ? 'Start match' : 'Waiting for host';
     session.lobby = m;
   } else if (m.t === 'go') {

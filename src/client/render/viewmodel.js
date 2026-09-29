@@ -8,16 +8,17 @@
 //     to fetch magazines, shells, clips, rockets and jars, and spent cases fly.
 
 import * as THREE from 'three';
-import { WEAPONS } from '../../shared/weapons.js';
+import { WEAPONS, reloadStyle } from '../../shared/weapons.js';
 import { buildWeaponModel, buildHand, buildKnife, buildGrenade } from './weapons3d.js';
-import { RELOADS, CYCLES, sampleTrack, sampleSteps } from './reloads.js';
+import { buildPerkBottle } from './machines.js';
+import { RELOADS, CYCLES, STYLE_CYCLES, sampleTrack, sampleSteps } from './reloads.js';
 
 const HIP = new THREE.Vector3(0.16, -0.19, -0.34);
 const HIP_LEYDEN = new THREE.Vector3(0.17, -0.24, -0.44);   // lower and wider: the jar rack stays clear of the sights
 const HIP_PISTOL = new THREE.Vector3(0.13, -0.15, -0.3);
 const _bx = new THREE.Vector3(), _by = new THREE.Vector3(), _bz = new THREE.Vector3(), _bm = new THREE.Matrix4();
 const _pa = new THREE.Vector3(), _pb = new THREE.Vector3(), _qa = new THREE.Quaternion(), _qb = new THREE.Quaternion();
-const _o = new THREE.Vector3(), _e = new THREE.Euler();
+const _o = new THREE.Vector3(), _e = new THREE.Euler(), _ej = new THREE.Vector3();
 const _k6 = new Array(6).fill(0), _k7 = new Array(7).fill(0);
 
 // Recoil springs: stiffness and damping (a little under critical, so it overshoots).
@@ -44,6 +45,7 @@ const POSES = {
   post: orient(new THREE.Quaternion(), [0, 1, 0.1], [-0.35, -0.5, 0.8]),     // around a magazine or foregrip
   over: orient(new THREE.Quaternion(), [0.9, -0.2, -0.3], [-0.6, 0.1, 0.8]), // from above: clips, shells, jars
   crank: orient(new THREE.Quaternion(), [1, 0.2, 0], [-0.4, -0.6, 0.7]),     // pinching a crank knob
+  side: orient(new THREE.Quaternion(), [0, 0.3, -1], [-0.9, -0.4, 0.15]),    // from the left, fist pointing forward: a revolver's cylinder, a speedloader
 };
 
 export class ViewModel {
@@ -78,12 +80,17 @@ export class ViewModel {
     this.nadeModel = buildGrenade();
     this.nadeModel.visible = false;
     this.root.add(this.nadeModel);
+    // Drinking a perk: a hand of its own brings the bottle up while the gun dips away.
+    this.drinkHand = buildHand('left');
+    this.drinkHand.visible = false;
+    this.root.add(this.drinkHand);
+    this.bottles = new Map();
     this.props = buildProps();
     for (const p of Object.values(this.props)) { p.visible = false; this.leftHand.add(p); }
-    // Spent cases: a pool of slots, each with a rifle case and a shotgun shell.
-    const proto = { case: casingMesh('case'), shell: casingMesh('shell') };
+    // Spent cases: a pool of slots, each with a rifle case, a shotgun shell and a 40 mm case.
+    const proto = { case: casingMesh('case'), shell: casingMesh('shell'), case40: casingMesh('case40') };
     this.cases = Array.from({ length: 14 }, () => {
-      const meshes = { case: proto.case.clone(), shell: proto.shell.clone() };
+      const meshes = Object.fromEntries(Object.entries(proto).map(([k, m]) => [k, m.clone()]));
       for (const m of Object.values(meshes)) { m.visible = false; this.scene.add(m); }
       return { meshes, mesh: null, t: 0, v: new THREE.Vector3(), spin: new THREE.Vector3() };
     });
@@ -193,11 +200,11 @@ export class ViewModel {
     this.flash.intensity = W.kind === 'wonder' ? (W.chain ? 4 : 0.6) : 3;
     this.flash.color.set(W.kind === 'wonder' ? 0x7ffcff : 0xffc27a);
     this.rounds = left;
-    const cyc = W.kind === 'bolt' ? 'bolt' : W.pump ? 'pump' : W.chain ? 'crank' : this.parts.slide ? 'slide' : null;
+    const cyc = STYLE_CYCLES[reloadStyle(W)] || (W.kind === 'bolt' ? 'bolt' : W.pump ? 'pump' : W.chain ? 'crank' : this.parts.slide ? 'slide' : null);
     if (cyc && !(cyc === 'slide' && left <= 0)) this.cycle = { kind: cyc, t: -CYCLES[cyc].delay, ejected: false };
     else if (cyc === 'slide') this.eject('case', 1);   // the last round: the slide locks back
-    // Everything else with a bolt throws its brass straight out.
-    if (!cyc && this.parts.bolt && W.kind !== 'rocket' && W.kind !== 'wonder') this.eject('case', 1);
+    // Everything else with a bolt throws its brass (or a semi-auto shotgun's hull) straight out.
+    if (!cyc && this.parts.bolt && W.kind !== 'rocket' && W.kind !== 'wonder') this.eject(W.kind === 'shotgun' ? 'shell' : 'case', 1);
   }
 
   reload(dur, style) {
@@ -208,6 +215,24 @@ export class ViewModel {
   cancel() { if (this.anim?.kind === 'reload') this.anim = null; }
   knife() { this.anim = { kind: 'knife', t: 0, dur: 0.42 }; this.knifeModel.visible = true; }
   grenade() { this.anim = { kind: 'nade', t: 0, dur: 0.55 }; this.nadeModel.visible = true; }
+
+  // Drink a perk: about two seconds with the bottle tipped back.
+  drink(perk) {
+    let b = this.bottles.get(perk);
+    if (!b) {
+      b = buildPerkBottle(perk);
+      b.position.set(0.02, -0.06, -0.05);
+      b.rotation.set(0.2, 0, -0.15);
+      b.scale.setScalar(0.72);
+      this.drinkHand.add(b);
+      this.bottles.set(perk, b);
+    }
+    for (const [id, m] of this.bottles) m.visible = id === perk;
+    this.anim = { kind: 'drink', t: 0, dur: 2.1 };
+    this.drinkHand.visible = true;
+  }
+
+  get drinking() { return this.anim?.kind === 'drink'; }
 
   // Rounds in the magazine (set every frame by the game).
   setRounds(n) { this.rounds = n; }
@@ -293,6 +318,16 @@ export class ViewModel {
     }
     // Magazine state at rest: a spent rocket tube is empty, a pistol's slide locks back.
     const reloading = this.anim?.kind === 'reload';
+    // Parts that turn on their own (userData.spin, rad/s about Z: the Gale Cannon's
+    // turbine) whirl after a shot, stall through a reload and spin up as it ends.
+    for (const part of Object.values(P)) {
+      const ud = part.userData;
+      if (!ud.spin) continue;
+      const k = this.cycle ? 8 : reloading ? (this.anim.t / this.anim.dur > 0.85 ? 5 : 0) : 1;
+      ud.rate = (ud.rate ?? ud.spin) + (ud.spin * k - (ud.rate ?? ud.spin)) * Math.min(1, dt * 3);
+      ud.angle = ((ud.angle || 0) + ud.rate * dt) % (Math.PI * 2);
+      part.rotation.z += ud.angle;
+    }
     if (!reloading && WEAPONS[this.id]?.kind === 'rocket' && P.mag) P.mag.visible = this.rounds > 0;
     if (P.slide && this.rounds <= 0 && !this.cycle) P.slide.position.z = rest.slide.pos.z + 0.03;
     const hands = { left: 'grip', right: 'grip' };
@@ -318,13 +353,23 @@ export class ViewModel {
         const S = RELOADS[A.style];
         this.play(S, u, p, r, hands);
         if (S.prop) prop = sampleSteps(S.prop, u).a;
-        if (S.eject && !A.ejected && u >= S.eject[0]) { A.ejected = true; this.eject(S.eject[1], S.eject[2]); }
+        if (S.eject && !A.ejected && u >= S.eject[0]) { A.ejected = true; this.eject(S.eject[1], S.eject[2], S.eject[3] === 'drop'); }
         if (A.style === 'jar') this.showCharge(u < 0.15 ? this.rounds : u < 0.72 ? 0 : Math.min(this.cores.length, Math.floor((u - 0.72) / 0.05) + 1));
       } else if (A.kind === 'knife') {
         const thrust = Math.sin(u * Math.PI);
         p.x += thrust * 0.12; p.y -= thrust * 0.12; r.z -= thrust * 0.5;
         this.knifeModel.position.set(0.12 - thrust * 0.1, -0.16 + thrust * 0.04, -0.2 - thrust * 0.28);
         this.knifeModel.rotation.set(-0.2, 0.3 - thrust * 0.5, -0.6 + thrust * 0.3);
+      } else if (A.kind === 'drink') {
+        // The gun dips out of sight, the bottle comes up to the mouth and tips back.
+        const down = Math.min(1, u / 0.18, (1 - u) / 0.15);
+        p.y -= down * 0.45; r.x -= down * 0.7;
+        const up = Math.min(1, Math.max(0, (u - 0.1) / 0.25)) * Math.min(1, Math.max(0, (0.92 - u) / 0.2));
+        const e = up * up * (3 - 2 * up);
+        const tip = Math.min(1, Math.max(0, (u - 0.4) / 0.2)) * Math.min(1, Math.max(0, (0.8 - u) / 0.12));
+        const glug = Math.sin(A.t * 11) * 0.012 * tip;
+        this.drinkHand.position.set(-0.04 + (1 - e) * -0.1, -0.44 + e * 0.33 + glug, -0.34 - e * 0.02);
+        this.drinkHand.rotation.set(-0.4 + e * 0.4 + tip * 1.25, 0.3, 0.2 - tip * 0.15);
       } else if (A.kind === 'nade') {
         p.y -= Math.sin(u * Math.PI) * 0.18; r.x -= Math.sin(u * Math.PI) * 0.4;
         const k = u < 0.5 ? u / 0.5 : 1;
@@ -336,6 +381,7 @@ export class ViewModel {
         this.anim = null;
         this.knifeModel.visible = false;
         this.nadeModel.visible = false;
+        this.drinkHand.visible = false;
       }
     }
     if (!reloading || this.anim?.style !== 'jar') this.showCharge(this.rounds);
@@ -413,25 +459,28 @@ export class ViewModel {
     });
   }
 
-  // Throw spent cases out of the gun's ejection port (or breech), to the right and up.
-  eject(kind, count = 1) {
+  // Throw spent cases out of the gun's ejection port (or breech), to the right and up;
+  // `drop` lets a revolver's empties fall out of its cylinder ('rounds') instead.
+  eject(kind, count = 1, drop = false) {
     if (!this.current) return;
-    const src = this.parts.bolt || this.parts.slide || this.parts.pump || this.parts.barrels;
-    const at = src ? src.position : _o.set(0, 0.06, -0.05);
+    const src = (drop && this.parts.rounds) || this.parts.bolt || this.parts.slide || this.parts.pump || this.parts.barrels;
+    this.current.updateWorldMatrix(true, true);
+    const at = src ? this.current.worldToLocal(src.getWorldPosition(_ej)) : _o.set(0, 0.06, -0.05);
     for (let i = 0; i < count; i++) {
       const c = this.cases.find((q) => q.t <= 0) || this.cases.reduce((x, y) => (y.t < x.t ? y : x));
       if (c.mesh) c.mesh.visible = false;
       c.mesh = c.meshes[kind];
       c.mesh.visible = true;
-      _pa.set(at.x + 0.02, at.y + 0.015, at.z + i * 0.02);
-      this.current.updateWorldMatrix(true, false);
+      if (drop) _pa.set(at.x + Math.cos(i * 1.05) * 0.011, at.y + Math.sin(i * 1.05) * 0.011, at.z);
+      else _pa.set(at.x + 0.02, at.y + 0.015, at.z + i * 0.02);
       this.current.localToWorld(_pa);
       this.scene.worldToLocal(_pa);
       c.mesh.position.copy(_pa);
       const back = kind === 'shell' && this.anim?.style === 'break';
       // Keep cases away from the camera plane; crossing it magnifies a shell
       // to fill the screen. Break-action empties flick sideways and down.
-      c.v.set(back ? 0.65 + i * 0.18 : 1.1 + Math.random() * 0.5, back ? 0.35 : 1.3 + Math.random() * 0.5, -0.35);
+      if (drop) c.v.set((Math.random() - 0.5) * 0.3, -0.3 - Math.random() * 0.4, -0.1);
+      else c.v.set(back ? 0.65 + i * 0.18 : 1.1 + Math.random() * 0.5, back ? 0.35 : 1.3 + Math.random() * 0.5, -0.35);
       c.spin.set(Math.random() * 20, Math.random() * 20, Math.random() * 20);
       c.t = 0.7;
     }
@@ -497,7 +546,29 @@ function buildProps() {
     clip.add(r);
   }
   clip.position.set(0, -0.01, -0.035);
-  return { shell: one, shells: two, clip };
+  // A revolver speedloader held by its knob in the fist ('side' pose), six rounds in
+  // a ring pointing out of the top of the fist.
+  const speedloader = new THREE.Group();
+  const knob = new THREE.Mesh(new THREE.CylinderGeometry(0.0075, 0.0095, 0.02, 6), steel);
+  knob.position.y = -0.014;
+  speedloader.add(new THREE.Mesh(new THREE.CylinderGeometry(0.019, 0.019, 0.01, 8), steel), knob);
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    const r = new THREE.Mesh(new THREE.CylinderGeometry(0.0042, 0.005, 0.03, 6), brass);
+    r.position.set(Math.cos(a) * 0.0115, 0.018, Math.sin(a) * 0.0115);
+    speedloader.add(r);
+  }
+  speedloader.position.set(0, 0.034, 0);
+  // A 40 mm grenade held by its case in the fist ('side' pose), nose out of the top.
+  const g40 = new THREE.Group();
+  const olive = new THREE.MeshLambertMaterial({ color: 0x4f5634, flatShading: true });
+  const c40 = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.038, 8), brass);
+  c40.position.y = -0.019;
+  const nose = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.02, 0.044, 8), olive);
+  nose.position.y = 0.022;
+  g40.add(c40, nose);
+  g40.position.set(0, 0.02, 0);
+  return { shell: one, shells: two, clip, speedloader, shell40: g40 };
 }
 
 function casingMesh(kind) {
@@ -509,6 +580,7 @@ function casingMesh(kind) {
     g.add(b);
     return g;
   }
+  if (kind === 'case40') return new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.038, 8), new THREE.MeshLambertMaterial({ color: 0xc9a14a, flatShading: true }));
   return new THREE.Mesh(new THREE.CylinderGeometry(0.0045, 0.005, 0.03, 6), new THREE.MeshLambertMaterial({ color: 0xd8b25a, flatShading: true }));
 }
 

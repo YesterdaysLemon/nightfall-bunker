@@ -3,6 +3,8 @@
 import { drawTally } from './render/chalk.js';
 import { PLAYER_COLORS } from '../shared/protocol.js';
 import { powerupName } from '../shared/powerups.js';
+import { perkIcon } from './perk-icons.js';
+import { PERKS } from '../shared/perks.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -21,6 +23,7 @@ export class HUD {
     this.promptEl = $('prompt');
     this.cross = $('crosshair');
     this.pus = $('powerups');
+    this.perkRow = $('perks');
     this.hurtEl = $('hurt');
     this.hurtDir = $('hurtDir');
     this.downedEl = $('downed');
@@ -124,6 +127,18 @@ export class HUD {
       this.last.cs = s;
     }
     if (this.last.cv !== visible) { this.cross.classList.toggle('hide', !visible); this.last.cv = visible; }
+  }
+
+  // The perks you have, as icons in the order you bought them.
+  perks(list) {
+    if (!this.perkRow) return;
+    this.perkRow.replaceChildren(...list.map((id) => {
+      const img = document.createElement('img');
+      img.src = perkIcon(id, 64);
+      img.alt = PERKS[id]?.name || id;
+      img.title = img.alt;
+      return img;
+    }));
   }
 
   powerups(insta, dbl) {

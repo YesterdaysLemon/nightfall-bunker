@@ -42,9 +42,14 @@ well formed and its look exists.
    - `kind` and `sound`
    - `price` (sold on a wall) and `box` (mystery-box weight)
    - `grip` and `reloadStyle`
-   - `projectile` for rockets and orbs, or `chain` for chain lightning (the Leyden
-     Rifle)
-2. **Model:** add a builder to `WEAPON_BUILDERS` in `src/client/render/weapons3d.js`.
+   - `projectile` for rockets, orbs and grenades (with `cripple` and `stun` for what a
+     blast does to survivors), `chain` for chain lightning (the Leyden Rifle) or
+     `cone` for a blast of air (the Gale Cannon)
+   - a name for its Forge upgrade in `UPGRADES` (the `<id>_up` copy is generated:
+     double damage, bigger magazine, the Forge camo)
+2. **Model:** add a builder to `WEAPON_BUILDERS` in `src/client/render/weapons3d.js`,
+   or in its own file under `src/client/render/guns/` as `(B, M, K) => length` (K is
+   the kit weapons3d passes in; `coldwar.js` is the example).
    - Name its moving parts `mag`, `bolt`, `slide`, `pump` or `barrels` so the
      reloads can move them.
    - A part can ride on another (`B.part(name, pos, rot, order, parent)`), like
@@ -57,7 +62,7 @@ well formed and its look exists.
    After-shot actions (bolt, pump, slide, crank) are `CYCLES` in the same file.
    `node scripts/guns-smoke.mjs --only <id>` renders a contact sheet to check it.
 4. **Wall buy (optional):** place it on a wall in `WALL_BUYS` in the map. The
-   chalk outline draws itself.
+   chalk outline draws itself. A map's box can offer its own guns (`BOX_POOL`).
 5. **New sound (optional):** a new sound recipe is a `GUNS` entry in `src/client/audio.js`.
 
 `tests/weapons.test.js` checks that every gun has stats, a model, a sound and a
@@ -90,8 +95,10 @@ ones are `src/shared/encounters/hounds.js` (hound rounds) and `kintsugi.js`
 | `onDamaged` / `onKill` / `onBlast` / `applyPowerup` | damage, kills, explosions, power-ups |
 | `snapshot` / `welcome` | fields clients receive |
 
-Register it in `DEFAULT_ENCOUNTERS`. `new GameSim({ encounters: [...] })` picks
-a different set, for example for another mode.
+Register it in `ENCOUNTERS` (`src/shared/sim.js`) and name it in a map's
+`encounters` list (the bunker runs hounds and the Kintsugi egg; the palace runs
+hounds and its machines). `new GameSim({ encounters: [...] })` picks a different
+set, for example for another mode.
 
 On the client, give its events a handler group in `src/client/events.js` (like
 `HOUND_EVENTS`). Register the group in the `Game` constructor
@@ -108,32 +115,56 @@ On the client, give its events a handler group in `src/client/events.js` (like
 A rebindable key is an entry in `ACTIONS` (`settings.js`). The game checks the
 action's default code, and the player's binding is mapped onto it in `Input`.
 
-## A map (current state)
+## A map
 
-The rules are ready for more than one map; the renderers are not yet.
+Two maps exist: the Airfield Bunker (`src/shared/map.js`) and the Aurora Picture
+Palace (`src/shared/maps/palace.js`). Each is one object in `MAPS`, made with
+`defineMap` from `src/shared/mapkit.js` (which also has the building blocks:
+`box`, `wallRun`, `slabWithHoles`, `makeWindows`, `stairBoxes`, `rampHeight`).
 
-**Ready:**
-- `src/shared/map.js` exports the bunker both as named constants and as one
-  object, `BUNKER`, registered in `MAPS`.
-- `new GameSim({ map })`, `new World(map)` and `new NavGrid(map)` take that
-  object, and `tests/maps.test.js` checks every map in `MAPS`: required data, a
-  nav path from every window to the players, and one round of rules.
+1. **Rules data** (`src/shared/maps/<id>.js`):
+   - `buildStaticBoxes()`: every wall, floor and prop as tagged boxes. Floors are the
+     tags in `FLOOR_TAGS` (`floor0`, `floor`, `slab`, `step`, `stage`, `landing`);
+     everything else blocks.
+   - `NAV_LEVELS` (floor heights) and `NAV_REGIONS` (per level, the rectangles people
+     walk). The navigation grid finds each spot's floor from the boxes; stairs are
+     `STAIRS` flights along x or z and join floors by themselves.
+   - `WINDOWS` (`makeWindows`), `SPAWNS` outside them, `DOORS` (with the zones they
+     open), `ZONES` and `zoneAt`, `WALL_BUYS`, `BOX_SPOTS` (the box moves between
+     them when there are several), `PLAYER_SPAWNS`, `LIGHTS` (any number; lamps
+     marked `power` wait for the breaker), `navBounds`, `playBounds`, `worldBounds`.
+   - Optional: `BOX_POOL`, `encounters`, machines (`POWER`, `PERKS`, `FORGE`,
+     `TELEPORT`, `TRAPS`, run by the `machines` encounter), `RADIO`, `EGG`, `fog`,
+     `attract` (the menu camera).
+2. **Register it** in `MAPS` (`src/shared/map.js`). `tests/maps.test.js` then checks
+   it: required data, every window reaching the players, every wall buy, box spot and
+   machine reachable, closed doors keeping zones shut, and a round of rules.
+3. **Dressing** (`src/client/render/maps/<id>.js`, registered in `maps/index.js`):
+   `{ build(level, batch), after(level), door(level, d), exterior(level), update }`.
+   The shared `Level` draws windows and boards, doors and debris, wall buys and the
+   box; the dressing draws everything else and hangs a fixture on each lamp
+   (`level.rig.bulbs[i].bulb`). `bunker.js` and `palace.js` are the examples.
+4. **Choosing it:** the menu and the lobby list `MAPS` by itself (name and `blurb`).
+   The host's pick travels party -> `createMatch(region, { code, map })` -> the match
+   -> `welcome.map`, and the client builds that map (`Game.setMap`).
 
-**To add a second map:**
-1. **Shape:** write a module exporting an object of the same shape as `BUNKER`,
-   and add it to `MAPS`.
-2. **Navigation limits:** it must fit the current grid's limits: two floors (the
-   ground and `LOFT_Y`), with stairs that climb along x. Generalising `nav.js` is
-   the first job for a very different layout.
-3. **Rendering:** the client still draws the bunker from its named exports. Pass
-   the map into these, which is the main remaining job:
-   - `Level`, `Exterior`, `EggProps` and `SceneRig` (lights and fog)
-   - the handful of `game.js` references
-4. **Choosing it:**
-   - a host-only lobby choice sent to the party (`src/net/rooms.js`)
-   - `createMatch(region, { code, map })` in the Worker and Node server
-   - `map` in the `welcome` message
-   - a `PROTOCOL` bump
+## A perk
+
+1. **Entry:** add it to `PERKS` in `src/shared/perks.js`: name, cost, colour, blurb and
+   its effect field (`hp`, `reviveMult`, `reloadMult`, `rateMult`, or a new one read
+   where it matters).
+2. **Machine and icon:** a look in `PERK_LOOKS` (`src/client/render/machines.js`) and a
+   symbol in `PERK_SYMBOLS` (`src/client/perk-icons.js`); a jingle in `audio.js`.
+3. **Place it** in a map's `PERKS`. `tests/perks.test.js` checks all of it.
+
+## A machine or trap
+
+The `machines` encounter (`src/shared/encounters/machines.js`) owns the breaker, perks,
+the Forge, the teleporter and the Spark Gates: its `handle` takes the `buy` messages,
+its `step` runs them, `welcome` tells late joiners. On the client, `MachineProps`
+(`src/client/render/machine-props.js`) places the models, `MACHINE_EVENTS`
+(`events.js`) follows the server, and `Game.machineTarget` shows the prompts.
+`tests/machines.test.js` and `scripts/palace-smoke.mjs` exercise them.
 
 ## A different theme
 

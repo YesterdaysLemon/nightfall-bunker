@@ -27,7 +27,7 @@ test('every weapon has stats, a model, a sound and valid options', () => {
     if (W.projectile) {
       const P = W.projectile;
       for (const k of ['speed', 'radius', 'gravity', 'shake']) assert.ok(Number.isFinite(P[k]), `${id}.projectile.${k}`);
-      assert.ok(['rocket', 'orb'].includes(P.look) && ['fire', 'arc'].includes(P.blast), `${id}.projectile look and blast`);
+      assert.ok(['rocket', 'orb', 'grenade'].includes(P.look) && ['fire', 'arc'].includes(P.blast), `${id}.projectile look and blast`);
     }
     if (W.chain) {
       for (const k of ['hops', 'reach', 'delay', 'aim', 'bossDamage']) assert.ok(Number.isFinite(W.chain[k]) && W.chain[k] >= 0, `${id}.chain.${k}`);

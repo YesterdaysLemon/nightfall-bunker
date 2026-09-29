@@ -64,13 +64,18 @@ jobs:
           npm run touch-smoke
           npm run ios-smoke
           npm run hounds-smoke
+          npm run palace-smoke
+          npm run combat-smoke
           npm run audio-check
       - name: Keep smoke screenshots
         if: always()
         uses: actions/upload-artifact@v7.0.1
         with:
           name: smoke-screenshots
-          path: output/smoke/
+          path: |
+            output/smoke/
+            output/palace/
+            output/combat/
           if-no-files-found: ignore
       - name: Notify Deploy Manager
         if: >-

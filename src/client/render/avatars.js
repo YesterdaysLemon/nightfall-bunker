@@ -270,6 +270,14 @@ export class Avatars {
     if (a.weapon !== row[8]) this.setWeapon(a, row[8]);
   }
 
+  // The server moved this player (the teleporter): jump there, don't glide.
+  snap(id, x, y, z) {
+    const a = this.map.get(id);
+    if (!a) return;
+    a.samples.length = 0;
+    Object.assign(a, { x, y, z });
+  }
+
   setWeapon(a, id) {
     a.weapon = id;
     a.gun.clear();

@@ -4,7 +4,12 @@
 //
 // An encounter for GameSim (see "Encounters" in sim.js). Its state lives on the
 // sim: houndRng (its own random stream, so hound scheduling never disturbs the
-// zombies), houndRound (this round is a hound round) and nextHoundRound.
+// zombies), houndRound (this round is a hound round), nextHoundRound and houndWave
+// (how many hound rounds came before this one).
+//
+// Pacing: a few at a time, not a swarm. Two hounds are loose at once on the first
+// hound round, one more on each later one (up to six), plus one per extra player,
+// and a few seconds pass after one dies before the next warps in.
 
 import { ZC, ZS, PS } from '../protocol.js';
 import { enemy } from '../enemies.js';
@@ -13,7 +18,17 @@ import { mulberry32 } from '../rng.js';
 import { r2 } from '../wire.js';
 
 export function houndCount(r, players) {
-  return Math.round((7 + Math.floor(r / 4)) * (1 + 0.6 * (Math.max(1, players) - 1)));
+  return Math.round((5 + Math.floor(r / 4)) * (1 + 0.6 * (Math.max(1, players) - 1)));
+}
+
+// How many hounds can be loose at once on hound round number `wave` (0 = the first).
+export function houndCap(wave, players) {
+  return Math.min(6, 2 + wave) + Math.max(0, players - 1);
+}
+
+// Seconds between hounds while below the cap; later hound rounds come quicker.
+export function houndInterval(wave, u) {
+  return Math.max(1.3, 3.2 - 0.35 * wave) * (0.8 + u * 0.45);
 }
 
 export function houndHealth(r) {
@@ -28,12 +43,14 @@ export const HOUND_ROUNDS = {
     sim.houndRng = mulberry32(seed ^ 0x9e3779b9);
     sim.houndRound = false;
     sim.nextHoundRound = firstHoundRound ?? 5 + Math.floor(sim.houndRng() * 3);
+    sim.houndWave = -1;
   },
 
   claimsRound(sim, players) {
     sim.houndRound = sim.round === sim.nextHoundRound;
     if (!sim.houndRound) return false;
     sim.nextHoundRound = sim.round + 4 + Math.floor(sim.houndRng() * 2);
+    sim.houndWave++;
     sim.toSpawn = houndCount(sim.round, players);
     sim.spawnT = 3.5; // let the fog roll in and the howls finish first
     return true;
@@ -41,14 +58,16 @@ export const HOUND_ROUNDS = {
 
   roundStarted(sim) { sim.emit(['hounds', sim.round]); },
 
+  // The clock only runs while the pack is below its cap, so a kill buys a breather.
   spawnStep(sim, dt) {
-    sim.spawnT -= dt;
-    const cap = Math.min(sim.maxAlive, 2 + 2 * sim.activePlayers().length);
+    const cap = Math.min(sim.maxAlive, houndCap(sim.houndWave, sim.activePlayers().length));
     let hounds = 0;
     for (const z of sim.zombies.values()) if (z.cls === ZC.HOUND) hounds++;
-    if (sim.spawnT <= 0 && hounds < cap) {
+    if (hounds >= cap) return;
+    sim.spawnT -= dt;
+    if (sim.spawnT <= 0) {
       if (spawnHound(sim)) sim.toSpawn--;
-      sim.spawnT = 0.7 + sim.houndRng() * 1.1;
+      sim.spawnT = houndInterval(sim.houndWave, sim.houndRng());
     }
   },
 
@@ -69,7 +88,7 @@ export const HOUND_ROUNDS = {
 // A hound appears on a walkable cell a few metres from a random living player,
 // on their floor, out of arm's reach of everyone. Returns false if nowhere fits.
 export function spawnHound(sim) {
-  const alive = sim.activePlayers().filter((p) => p.state === PS.ALIVE);
+  const alive = sim.activePlayers().filter((p) => p.state === PS.ALIVE && !p.away);
   if (!alive.length) return false;
   const target = alive[Math.floor(sim.houndRng() * alive.length)];
   const nav = sim.nav;

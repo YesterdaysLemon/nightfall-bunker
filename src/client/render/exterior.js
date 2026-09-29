@@ -392,6 +392,11 @@ export class Exterior {
     this.group.add(this.beam);
   }
 
+  dispose() {
+    this.group.parent?.remove(this.group);
+    this.group.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+  }
+
   update(dt) {
     this.time += dt;
     if (this.beam) {

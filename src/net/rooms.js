@@ -4,6 +4,7 @@
 
 import { GameSim, TICK } from '../shared/sim.js';
 import { MAX_PLAYERS, PROTOCOL, chooseRegion } from '../shared/protocol.js';
+import { MAPS, DEFAULT_MAP, mapById } from '../shared/map.js';
 
 const MAX_MSG = 8192;
 
@@ -28,10 +29,11 @@ function cleanToken(t) {
 
 // --- Match ------------------------------------------------------------------------------
 export class MatchRoom {
-  constructor({ id = 'local', region = 'local', seed, timers = globalThis, onEnded, log = () => {} } = {}) {
+  // map: a map id (shared/map.js MAPS); unknown ids fall back to the default.
+  constructor({ id = 'local', region = 'local', seed, map = DEFAULT_MAP, timers = globalThis, onEnded, log = () => {} } = {}) {
     this.id = id;
     this.region = region;
-    this.sim = new GameSim({ seed: seed ?? (Math.random() * 2 ** 32) >>> 0 });
+    this.sim = new GameSim({ seed: seed ?? (Math.random() * 2 ** 32) >>> 0, map: mapById(map) });
     this.timers = timers;
     this.onEnded = onEnded;
     this.log = log;
@@ -139,6 +141,7 @@ export class PartyRoom {
     this.match = null;
     this.starting = false;
     this.created = Date.now();
+    this.map = DEFAULT_MAP;   // the host picks (the lobby's first member brings their choice)
   }
 
   get size() { return [...this.members.values()].filter((m) => m.id).length; }
@@ -165,12 +168,17 @@ export class PartyRoom {
         id: token.slice(0, 6), token, name: cleanName(m.name), pings: cleanPings(m.pings, this.regions),
         joined: Date.now(),
       });
+      if (this.host() === mem && this.state === 'waiting' && MAPS[m.map]) this.map = m.map;
       if (m.back && this.match && m.back === this.match.id) { this.match = null; this.state = 'waiting'; }
       this.broadcast();
       if (this.state === 'ingame' && this.match) safeSend(socket, JSON.stringify({ t: 'go', ...this.match }));
       return;
     }
     if (m.t === 'pings') { mem.pings = cleanPings(m.pings, this.regions); this.broadcast(); return; }
+    if (m.t === 'map') {
+      if (this.host() === mem && this.state === 'waiting' && MAPS[m.id]) { this.map = m.id; this.broadcast(); }
+      return;
+    }
     if (m.t === 'back') {
       if (this.match && m.match === this.match.id) { this.match = null; this.state = 'waiting'; this.broadcast(); }
       return;
@@ -204,8 +212,8 @@ export class PartyRoom {
   async start() {
     this.starting = true;
     const { region } = this.choice();
-    const id = await this.createMatch(region, { code: this.code });
-    this.match = { match: id, id, region };
+    const id = await this.createMatch(region, { code: this.code, map: this.map });
+    this.match = { match: id, id, region, map: this.map };
     this.state = 'ingame';
     this.starting = false;
     const msg = JSON.stringify({ t: 'go', ...this.match });
@@ -219,7 +227,7 @@ export class PartyRoom {
   }
 
   meta() {
-    return { code: this.code, public: this.isPublic, state: this.state, size: this.size, region: this.choice().region, match: this.match };
+    return { code: this.code, public: this.isPublic, state: this.state, size: this.size, region: this.choice().region, match: this.match, map: this.map };
   }
 
   broadcast() {
@@ -228,7 +236,7 @@ export class PartyRoom {
     const members = [...this.members.values()].filter((m) => m.id).map((m) => ({
       id: m.id, name: m.name, host: m === host, ping: Number.isFinite(m.pings?.[ch.region]) ? Math.round(m.pings[ch.region]) : null,
     }));
-    const msg = JSON.stringify({ t: 'lobby', code: this.code, public: this.isPublic, state: this.state, members, region: ch.region, worst: Math.round(ch.worst), match: this.match });
+    const msg = JSON.stringify({ t: 'lobby', code: this.code, public: this.isPublic, state: this.state, members, region: ch.region, worst: Math.round(ch.worst), match: this.match, map: this.map });
     for (const [sock, m] of this.members) if (m.id) safeSend(sock, msg);
     this.onChange(this.meta());
   }

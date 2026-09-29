@@ -4,6 +4,9 @@
 //
 // Axes: +x east, +z south, +y up. Metres.
 
+import { defineMap } from './mapkit.js';
+import { PALACE } from './maps/palace.js';
+
 export const T = 0.3;                 // wall thickness
 export const LOFT_Y = 3.2;            // loft floor top
 export const SLAB_BOTTOM = 3.0;       // ground-floor ceiling
@@ -331,19 +334,29 @@ export const EXTERIOR = {
 };
 
 // --- The map as one object ----------------------------------------------------------
-// Everything the rules, collision and navigation need from a map, in one place.
-// GameSim({ map }), new World(map) and new NavGrid(map) take one of these (the
-// bunker by default). A second map is a module that exports an object of the same
-// shape (see docs/EXTENDING.md); the client renderers still read the bunker's
-// named exports directly, which is the next step for multiple maps.
-export const BUNKER = {
-  id: 'bunker', name: 'Airfield Bunker',
+// Everything the rules, collision, navigation and renderer need from a map, in one
+// place. GameSim({ map }), new World(map), new NavGrid(map) and the client's Level
+// take one of these (the bunker by default); mapkit.defineMap fills in defaults.
+// maps/palace.js is the second map (see docs/EXTENDING.md).
+export const BUNKER = defineMap({
+  id: 'bunker', name: 'Airfield Bunker', blurb: 'A boarded-up airfield command post. Where it began.',
+  encounters: ['hounds', 'kintsugi'],
+  NAV_LEVELS: [0, LOFT_Y],
+  NAV_REGIONS: [[[IX0, IZ0, IX1, IZ1]], [[IX0, IZ0, IX1, IZ1]]],
+  navBounds: [BX0, BZ0, BX1, BZ1],
+  playBounds: [IX0 - 0.5, IZ0 - 0.5, IX1 + 0.5, IZ1 + 0.5, LOFT_Y + 3],
+  attract: { center: [-4, 2.2, 0], radius: 24, height: 6.5 },
   T, LOFT_Y, SLAB_BOTTOM, ROOF_Y, ROOF_TOP, BX0, BX1, BZ0, BZ1, IX0, IX1, IZ0, IZ1,
   ZONES, WINDOWS, MAX_BOARDS, STAIRS, DOORS, WALL_BUYS, MYSTERY_BOX, PLAYER_SPAWNS, RADIO, EGG,
   BALCONY, SPAWNS, LIGHTS, FURNITURE, EXTERIOR, STAIR_HOLES,
   openZones, zoneAt, stairFootprint, stairHeightAt, buildStaticBoxes, windowBlockers,
   worldBounds: [-24, -14, 20, 14],   // collision hash extent [x0, z0, x1, z1], outside set dressing included
-};
+});
 
-export const MAPS = { bunker: BUNKER };
+export const MAPS = { bunker: BUNKER, palace: PALACE };
 export const DEFAULT_MAP = 'bunker';
+
+// A map by id, falling back to the default for anything unknown (it comes off the wire).
+export function mapById(id) {
+  return MAPS[id] || MAPS[DEFAULT_MAP];
+}

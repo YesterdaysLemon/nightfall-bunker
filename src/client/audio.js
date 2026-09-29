@@ -62,6 +62,17 @@ function driveCurve(k, n = 1024) {
   return c;
 }
 
+// A gate as a waveshaper: silent below `th`, rising to 1 at the noise buffers' peak (0.95).
+// Fed slow random noise it gives sparse random spikes: crackle that loops without scheduling.
+function gateCurve(th, n = 1024) {
+  const c = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const x = (i * 2) / (n - 1) - 1;
+    c[i] = x > th ? Math.min(1, ((x - th) / (0.95 - th)) ** 2) : 0;
+  }
+  return c;
+}
+
 function seedInt(s) {
   if (typeof s === 'number' && Number.isFinite(s)) return s | 0;
   const str = String(s ?? '');
@@ -95,8 +106,8 @@ const BELL2 = [[1, 1, 1], [2.76, 0.35, 0.45]];
 const MUSICBOX = [[1, 1, 1], [4.2, 0.2, 0.22]];
 
 // crack: [bandpass Hz, Q, decay, peak]; snap: [decay, peak]; thump: [f0, f1, decay, peak];
-// tail / body: [noise, lowpass Hz, decay, peak]
-// Gun sound recipes, keyed by WEAPONS[id].sound ('rocket' and 'arc' are their own voices).
+// tail / body: [noise, lowpass Hz, decay, peak]; ring: [[Hz, decay, peak], ...] metal ringing on
+// Gun sound recipes, keyed by WEAPONS[id].sound ('rocket', 'arc', 'tesla', 'gale' are their own voices).
 const GUNS = {
   pistol: { vol: 0.7, crack: [2400, 0.9, 0.07, 1.0], snap: [0.018, 0.5], thump: [170, 55, 0.09, 0.9], tail: ['pink', 1400, 0.3, 0.22] },
   rifle: { vol: 0.8, crack: [1900, 0.7, 0.1, 1.1], snap: [0.025, 0.6], thump: [120, 42, 0.15, 1.1], tail: ['pink', 1000, 0.55, 0.3], drive: 'soft' },
@@ -104,9 +115,18 @@ const GUNS = {
   smg: { vol: 0.55, crack: [1700, 1.0, 0.045, 0.8], thump: [190, 80, 0.055, 0.7] },
   shotgun: { vol: 0.85, crack: [1100, 0.5, 0.17, 1.3], snap: [0.03, 0.7], thump: [85, 32, 0.26, 1.4], tail: ['brown', 800, 1.0, 0.55], body: ['pink', 2400, 0.12, 0.9], drive: 'hard' },
   lmg: { vol: 0.65, crack: [1300, 0.8, 0.065, 0.95], thump: [95, 40, 0.1, 1.1], tail: ['brown', 900, 0.22, 0.2] },
+  // .357 revolver: a hard, heavy crack and the frame ringing after it
+  magnum: {
+    vol: 0.7, crack: [2100, 0.6, 0.12, 1.3], snap: [0.03, 0.9], thump: [150, 44, 0.17, 1.25], tail: ['brown', 1300, 0.95, 0.45],
+    body: ['pink', 3000, 0.07, 0.6], drive: 'hard', ring: [[2830, 0.32, 0.05], [4390, 0.22, 0.035], [1510, 0.24, 0.04]],
+  },
 };
 
-export const GUN_SOUNDS = [...Object.keys(GUNS), 'rocket', 'arc', 'tesla'];
+export const GUN_SOUNDS = [...Object.keys(GUNS), 'rocket', 'arc', 'tesla', 'gale'];
+
+// Upgraded layer for the voices without a GUNS recipe: [shimmer ring s, shimmer level]. Noisy
+// shots get a louder shimmer; the Gale Cannon's rings on past its gust, heard as the wind dies.
+const UPGRADED = { rocket: [0.9, 1.3], arc: [0.6, 1], tesla: [0.7, 1.6], gale: [1.6, 2.2] };
 
 // Radio waltz melody: [beat, length in beats, semitones from D5]. 3/4, 10 bars.
 const WALTZ = [
@@ -130,6 +150,74 @@ const CUP_NOTES = [1760, 2093, 2637];            // A6, C7, E7: each broken cup 
 const PORCELAIN = [[2380, 0.14, 0.2], [3915, 0.1, 0.14], [5470, 0.07, 0.1], [7020, 0.05, 0.07]];
 const BOSS_BEAT = 0.46;
 
+// Struck metal and glass, as _bell partials: [ratio, amplitude, decay multiplier].
+const CLANK = [[1, 1, 1], [1.59, 0.7, 0.6], [2.35, 0.5, 0.45], [3.46, 0.3, 0.3]];
+const ANVIL = [[1, 1, 1], [2.71, 0.6, 0.8], [5.12, 0.35, 0.5], [8.3, 0.18, 0.3]];
+const GLASS = [[1, 1, 1], [2.32, 0.5, 0.6], [4.25, 0.25, 0.35]];
+
+// Perk machine jingles, all original. Melodies are [beat, length in beats, semitones]; each
+// perk's arrangement is a method (JINGLES) that plays them on the _line instruments.
+// Ironclad Tonic: brass-band oompah march in Bb, 2/4. Cornet, semitones from Bb4.
+const MARCH = [
+  [0, 1, -5], [1, 0.5, 0], [1.5, 0.5, 4], [2, 1.5, 7], [3.5, 0.5, 4],
+  [4, 0.5, 5], [4.5, 0.5, 4], [5, 0.5, 2], [5.5, 0.5, -1], [6, 1, 0], [7, 1, -5],
+  [8, 0.5, -3], [8.5, 0.5, 0], [9, 0.5, 5], [9.5, 0.5, 9], [10, 1, 7], [11, 0.5, 4], [11.5, 0.5, 0],
+  [12, 0.5, 2], [12.5, 0.5, 5], [13, 0.5, 4], [13.5, 0.5, 2], [14, 1, 0], [15, 1, -5], [16, 1, 0],
+];
+// Per bar: tuba on beats 1 and 2 (semitones from Bb2), horn chord off the beat (from Bb3).
+const MARCH_BARS = [
+  [0, -5, [4, 7, 12]], [0, 4, [4, 7, 12]], [-5, 2, [2, 5, 11]], [0, -5, [4, 7, 12]],
+  [-7, 0, [5, 9, 12]], [0, -5, [4, 7, 12]], [-5, -1, [2, 5, 11]], [0, -5, [4, 7, 12]],
+];
+// Lazarus Draught: a gentle celesta waltz in F, 3/4. Semitones from F5.
+const LAZ = [
+  [0, 2, 4], [2, 1, 7], [3, 1, 12], [4, 1, 11], [5, 1, 7], [6, 2, 9], [8, 1, 5],
+  [9, 1, 4], [10, 1, 2], [11, 1, -1], [12, 2, 0], [14, 1, 4], [15, 1, 9], [16, 1, 7], [17, 1, 5],
+  [18, 1, 2], [19, 1, 5], [20, 1, 11], [21, 3, 12],
+];
+// Per bar: harp bass (from F3), music-box plinks on beats 2-3 (from F4), soft pad chord (from F3).
+const LAZ_BARS = [
+  [0, [4, 7], [0, 4, 7]], [0, [4, 7], [0, 4, 7]], [-7, [5, 9], [0, 5, 9]], [-5, [2, 5], [-1, 2, 5]],
+  [-3, [4, 9], [0, 4, 9]], [-10, [5, 9], [2, 5, 9]], [-5, [2, 5], [-1, 2, 5]], [0, [4, 7], [0, 4, 7]],
+];
+// Quicksilver Cola: fast honky-tonk ragtime in C, 2/4, syncopated sixteenths. Semitones from C5.
+const RAG = [
+  [0, 0.25, 4], [0.25, 0.5, 7], [0.75, 0.25, 12], [1, 0.25, 11], [1.25, 0.25, 12], [1.5, 0.5, 7],
+  [2, 0.25, 9], [2.25, 0.5, 7], [2.75, 0.25, 4], [3, 0.25, 3], [3.25, 0.25, 4], [3.5, 0.5, 0],
+  [4, 0.25, 2], [4.25, 0.5, 5], [4.75, 0.25, 11], [5, 0.25, 9], [5.25, 0.25, 11], [5.5, 0.5, 5],
+  [6, 0.5, 4], [6.5, 0.25, 7], [6.75, 0.25, 4], [7, 1, 0],
+  [8, 0.25, 9], [8.25, 0.5, 12], [8.75, 0.25, 9], [9, 0.25, 8], [9.25, 0.25, 9], [9.5, 0.5, 5],
+  [10, 0.25, 7], [10.25, 0.5, 4], [10.75, 0.25, 0], [11, 0.25, 4], [11.25, 0.25, 7], [11.5, 0.5, 12],
+  [12, 0.25, 6], [12.25, 0.5, 9], [12.75, 0.25, 14], [13, 0.25, 12], [13.25, 0.25, 9], [13.5, 0.5, 6],
+  [14, 0.25, 7], [14.25, 0.25, 11], [14.5, 0.25, 14], [14.75, 0.25, 17], [15, 0.25, 16], [15.25, 0.25, 14], [15.5, 0.5, 11],
+  [16, 0.5, 12], [16.5, 0.25, 7], [16.75, 0.25, 4], [17, 0.5, 0], [17.5, 0.5, -5], [18, 1, 0],
+];
+// Stride left hand per bar: bass on beats 1 and 2 (from C3), chord on the offbeats (from C4).
+const RAG_BARS = [
+  [0, -5, [4, 7, 12]], [0, -5, [4, 7, 12]], [-5, 2, [5, 7, 11]], [0, -5, [4, 7, 12]],
+  [-7, 0, [5, 9, 12]], [0, -5, [4, 7, 12]], [2, -3, [6, 9, 12]], [-5, 2, [5, 7, 11]], [0, -5, [4, 7, 12]],
+];
+// Hair Trigger Stout: a swaggering saloon-western strut in E minor, 4/4 swung. Twang guitar,
+// semitones from E4; a whistle doubles bars 3-4 an octave up.
+const WEST = [
+  [0, 0.67, -5], [0.67, 0.33, -2], [1, 1.67, 0], [2.67, 0.33, 3], [3, 0.67, 5], [3.67, 0.33, 3],
+  [4, 1, 5], [5, 0.67, 3], [5.67, 0.33, 0], [6, 1.67, -4], [7.67, 0.33, -2],
+  [8, 0.67, -1], [8.67, 0.33, 2], [9, 1, 7], [10, 0.67, 5], [10.67, 0.33, 2], [11, 1, -1],
+  [12, 0.67, -5], [12.67, 0.33, -2], [13, 2.5, 0],
+];
+// Per bar: plucked bass [beat, beats, semitones from E2] and the backbeat chord (from E3).
+const WEST_BARS = [
+  [[[0, 2, 0], [2, 1.67, -5], [3.67, 0.33, 3]], [7, 12, 15]],
+  [[[0, 2, 5], [2, 1.67, 0], [3.67, 0.33, 6]], [5, 8, 12]],
+  [[[0, 2, 7], [2, 1.67, 2], [3.67, 0.33, -1]], [5, 7, 11]],
+  [[[0, 3, 0]], [7, 12, 15]],
+];
+const JINGLES = { ironclad: '_jIronclad', lazarus: '_jLazarus', quicksilver: '_jQuicksilver', hairtrigger: '_jHairtrigger' };
+export const PERK_JINGLES = Object.keys(JINGLES);
+
+// Map ambiences for startAmbience(kind) / ambience(kind).
+export const AMBIENCES = ['bunker', 'palace'];
+
 export class AudioEngine {
   constructor(opts = {}) {
     const o = opts && typeof opts === 'object' ? opts : {};
@@ -152,6 +240,9 @@ export class AudioEngine {
     this._hcache = new Map();
     this._buckets = {};
     this._boss = null;
+    this._loops = [];      // long positional loops whose walls and air update() keeps re-measuring
+    this._loopT = 0;
+    this._jingles = {};    // perk id -> the playing jingle's handle
     this._speechVoice = null;
     // Optional (x, y, z) => 0..1 wall occlusion between listener and a source, set by the game.
     this.occlusion = null;
@@ -188,6 +279,7 @@ export class AudioEngine {
   setMusicVolume(v) {
     this._muv = clamp(fin(v, this._muv), 0, 1);
     if (this.music) this.music.gain.setTargetAtTime(this._muv, this.ctx.currentTime, 0.05);
+    if (this.mrev) this.mrev.gain.setTargetAtTime(this._muv, this.ctx.currentTime, 0.05);
   }
 
   // Full 3D orientation when an up vector is given (HRTF uses elevation); otherwise the forward
@@ -248,8 +340,17 @@ export class AudioEngine {
       }
     }
     this._applyMuffle();
+    if (this._loops.length && now >= this._loopT) {
+      this._loopT = now + 0.2;
+      this._loops = this._loops.filter((v) => !v.dying && !v.done);
+      for (const v of this._loops) this._reaim(v, now);
+    }
     const a = this._amb;
-    if (a) {
+    if (a && a.kind === 'palace') {
+      if (now >= a.nextCreak) { this._creak(now + 0.05); a.nextCreak = now + rand(7, 20); }
+      if (now >= a.nextSettle) { this._settle(now + 0.05); a.nextSettle = now + rand(25, 55); }
+      if (now >= a.nextDoor) { this._doorGust(now + 0.05); a.nextDoor = now + rand(30, 75); }
+    } else if (a) {
       if (now >= a.nextRumble) { this._rumble(now + 0.05); a.nextRumble = now + rand(15, 40); }
       if (now >= a.nextCrow) { if (Math.random() < 0.6) this._crow(now + 0.05); a.nextCrow = now + rand(45, 120); }
     }
@@ -258,12 +359,17 @@ export class AudioEngine {
 
   // ---- weapons --------------------------------------------------------------------------------
 
-  gunshot(kind = 'pistol', pos) {
-    if (kind === 'rocket') return this._rocket(pos);
-    if (kind === 'arc') return this._arc(pos);
-    if (kind === 'tesla') return this._tesla(pos);
+  // `up`: an upgraded gun layers a sub-bass punch and a metallic shimmer over its usual shot.
+  gunshot(kind = 'pistol', pos, up = false) {
+    const v = kind === 'rocket' ? this._rocket(pos) : kind === 'arc' ? this._arc(pos)
+      : kind === 'tesla' ? this._tesla(pos) : kind === 'gale' ? this._gale(pos) : this._shot(kind, pos);
+    // the shimmer rings about as long as the gun's own tail, so automatic fire doesn't pile it up
+    if (v && up) this._upgraded(v, ...(UPGRADED[kind] || [GUNS[kind]?.tail?.[2] ?? 0.3, 1]));
+  }
+
+  _shot(kind, pos) {
     const G = GUNS[kind] || GUNS.pistol, P = validPos(pos);
-    const v = this._voice(P ? P_MED : P_HIGH, P); if (!v) return;
+    const v = this._voice(P ? P_MED : P_HIGH, P); if (!v) return null;
     const t = this._now(), r = rand(0.94, 1.06);
     v.out.gain.value = G.vol * (P ? 1.5 : 1);
     let mix = v.out;
@@ -278,10 +384,64 @@ export class AudioEngine {
       const [k, lf, td, tp] = G.tail;
       this._burst(v, v.out, t + 0.005, { kind: k, type: 'lowpass', f: lf * r, q: 0.7, a: 0.012, d: td, peak: tp });
     }
+    if (G.ring) for (const [f, d, p] of G.ring) this._tone(v, v.out, t + 0.004, { f: f * r, d, peak: p });
+    return v;
+  }
+
+  // Upgraded shot, in the shot's own voice at a fixed level whatever the gun: a sub punch landing
+  // just behind the crack (plus its octave, so small speakers still feel it), and close pairs of
+  // inharmonic partials beating into a metallic shimmer that rings on for `ring` s.
+  _upgraded(v, ring = 0.5, shine = 1) {
+    const t = v.t0 + 0.01, o = v.out, k = 1 / Math.max(0.4, o.gain.value), r = rand(0.97, 1.03), rd = clamp(ring * 1.1, 0.35, 1.8);
+    this._tone(v, o, t + 0.018, { f: 55, f2: 28, sw: 0.18, a: 0.004, d: 0.3, peak: 1.3 * k });
+    this._tone(v, o, t + 0.018, { f: 110, f2: 56, sw: 0.12, d: 0.14, peak: 0.4 * k });
+    const sh = this._g(v, 0.7);
+    link(this._osc(v, 'sine', 23, t, t + rd + 0.1), this._g(v, 0.3), sh.gain);
+    sh.connect(o);
+    for (const [f, d, p] of [[3390, 1, 0.1], [3409, 1, 0.085], [5230, 0.7, 0.06], [7890, 0.45, 0.04]]) {
+      this._tone(v, sh, t + 0.012, { f: f * r, a: 0.004, d: d * rd, peak: p * k * shine });
+    }
+    this._crackle(v, sh, t + 0.01, 0.4, { f: 7800, q: 1.2, count: 12, peak: 0.2 * k, fade: 0.8 });
+  }
+
+  // Gale Cannon: a deep whump, then one gust of noise swept up and back down through a band with
+  // a whistle riding it over a low roar, and the bellows gasping back in before the valve shuts.
+  _gale(pos) {
+    const P = validPos(pos), v = this._voice(P ? P_MED : P_HIGH, P); if (!v) return null;
+    const t = this._now(), o = v.out, d = 0.95;
+    o.gain.value = P ? 1.05 : 0.7;
+    const m = this._g(v, 1);
+    link(m, this._ws(v, this.curves.soft), o);
+    this._tone(v, m, t, { f: 78, f2: 30, sw: 0.25, d: 0.4, peak: 1.2 });
+    this._burst(v, m, t, { kind: 'brown', type: 'lowpass', f: 900, f2: 200, d: 0.2, peak: 1.1 });
+    this._burst(v, m, t, { kind: 'pink', type: 'lowpass', f: 2500, d: 0.05, peak: 0.6 });
+    const n = this._noise(v, 'pink', t, d + 0.1), bp = this._flt(v, 'bandpass', 260, 1.1), g = this._g(v);
+    bp.frequency.setValueAtTime(260, t);
+    bp.frequency.exponentialRampToValueAtTime(2600, t + 0.16);
+    bp.frequency.exponentialRampToValueAtTime(650, t + d);
+    ahr(g.gain, t, 0.03, 0.18, d - 0.21, 1.3);
+    link(n, bp, g, o);
+    const wl = this._flt(v, 'bandpass', 900, 9), wg = this._g(v);
+    wl.frequency.setValueAtTime(900, t);
+    wl.frequency.exponentialRampToValueAtTime(3400, t + 0.2);
+    wl.frequency.exponentialRampToValueAtTime(1300, t + 0.8);
+    ahr(wg.gain, t + 0.02, 0.06, 0.15, 0.55, 0.9);
+    link(n, wl, wg, o);
+    this._burst(v, o, t, { kind: 'brown', type: 'lowpass', f: 700, f2: 250, a: 0.02, h: 0.15, d: 0.7, peak: 1.0 });
+    // the bellows drawing breath: a reversed rush, then the valve clacking shut
+    const tb = t + 0.62, bn = this._noise(v, 'pink', tb, 0.45), bb = this._flt(v, 'bandpass', 500, 1.5), bg = this._g(v);
+    glide(bb.frequency, tb, 500, 1500, 0.34);
+    bg.gain.setValueAtTime(EPS, tb);
+    bg.gain.exponentialRampToValueAtTime(0.5, tb + 0.32);
+    bg.gain.exponentialRampToValueAtTime(EPS, tb + 0.38);
+    link(bn, bb, bg, o);
+    this._burst(v, o, tb + 0.36, { f: 1700, q: 3, d: 0.03, peak: 0.5 });
+    this._tone(v, o, tb + 0.36, { f: 240, f2: 130, d: 0.05, peak: 0.3 });
+    return v;
   }
 
   _rocket(pos) {
-    const P = validPos(pos), v = this._voice(P ? P_MED : P_HIGH, P); if (!v) return;
+    const P = validPos(pos), v = this._voice(P ? P_MED : P_HIGH, P); if (!v) return null;
     const t = this._now();
     v.out.gain.value = P ? 1.4 : 0.9;
     const m = this._g(v, 1);
@@ -290,11 +450,12 @@ export class AudioEngine {
     this._burst(v, m, t, { type: 'lowpass', f: 3500, d: 0.09, peak: 0.9 });
     this._burst(v, v.out, t + 0.02, { kind: 'pink', f: 450, f2: 2400, q: 1.4, a: 0.06, d: 0.9, peak: 1.0 });
     this._burst(v, v.out, t, { type: 'highpass', f: 4000, a: 0.02, d: 0.6, peak: 0.22 });
+    return v;
   }
 
   // Wonder weapon: FM + ring-modulated square zap rising in pitch, with electric crackle.
   _arc(pos) {
-    const P = validPos(pos), v = this._voice(P ? P_MED : P_HIGH, P); if (!v) return;
+    const P = validPos(pos), v = this._voice(P ? P_MED : P_HIGH, P); if (!v) return null;
     const t = this._now(), d = 0.32;
     v.out.gain.value = P ? 0.9 : 0.6;
     const car = this._osc(v, 'square', 260, t, t + d);
@@ -312,12 +473,13 @@ export class AudioEngine {
     link(car, ring, this._flt(v, 'highpass', 500, 0.7), g, v.out);
     this._crackle(v, v.out, t, 0.25, { f: 5200, q: 0.8, count: 22, peak: 0.55, spread: 1.4 });
     this._tone(v, v.out, t, { f: 240, f2: 55, d: 0.14, peak: 0.6 });
+    return v;
   }
 
   // Leyden Rifle: the jar dumps its charge. A hard snap and thump, a buzzing
   // ring-modulated tear that climbs then sags, crackle, and the capacitor whining down.
   _tesla(pos) {
-    const P = validPos(pos), v = this._voice(P ? P_MED : P_HIGH, P); if (!v) return;
+    const P = validPos(pos), v = this._voice(P ? P_MED : P_HIGH, P); if (!v) return null;
     const t = this._now(), d = 0.55;
     v.out.gain.value = P ? 1.0 : 0.7;
     const m = this._g(v, 1);
@@ -334,6 +496,7 @@ export class AudioEngine {
     link(bz, ring, this._flt(v, 'bandpass', 1800, 0.6), bg, v.out);
     this._crackle(v, v.out, t, 0.45, { f: 5000, q: 0.7, count: 34, peak: 0.6, spread: 1.6, len: 0.008 });
     this._tone(v, v.out, t + 0.03, { f: 3200, f2: 700, sw: 0.5, d: 0.55, peak: 0.07 });
+    return v;
   }
 
   // One hop of chain lightning landing on an enemy: a snap and a short fizz,
@@ -360,6 +523,24 @@ export class AudioEngine {
     v.out.gain.value = 0.5;
     this._crackle(v, v.out, t, d, { f: 3600, q: 0.6, count: 40, peak: 0.45, spread: 0.8, len: 0.01, fade: 0.9 });
     this._burst(v, v.out, t, { kind: 'pink', type: 'highpass', f: 2500, a: 0.05, d, peak: 0.18 });
+  }
+
+  // An enemy held by the Arc Pistol's blast (~1 s): a stuttering ring-modulated buzz in the body
+  // and electric fizz crawling over it. Returns a track handle; the enemy keeps moving, slowly.
+  stun(pos) {
+    if (!this._ok() || !this._take('stun', 4, 6)) return NOOP_TRACK;
+    const P = validPos(pos), v = this._voice(P_MED, P); if (!v) return NOOP_TRACK;
+    const t = this._now(), o = v.out, d = rand(0.9, 1.1), end = t + d + 0.05;
+    o.gain.value = P ? 0.85 : 0.55;
+    const hz = this._osc(v, 'square', rand(85, 100), t, end), ring = this._g(v, 0), st = this._g(v, 0.5), hg = this._g(v);
+    this._osc(v, 'sine', 1620, t, end).connect(ring.gain);
+    link(this._osc(v, 'square', rand(11, 15), t, end), this._g(v, 0.5), st.gain);
+    wobble(hz.frequency, t, d, hz.frequency.value, 0.08, 5, 0.8);
+    ahr(hg.gain, t, 0.02, d * 0.5, d * 0.45, 0.3);
+    link(hz, ring, this._flt(v, 'highpass', 600, 0.7), st, hg, o);
+    this._crackle(v, o, t, d, { f: 4600, q: 0.8, count: 34, peak: 0.5, spread: 1.1, len: 0.007, fade: 0.7 });
+    this._burst(v, o, t, { type: 'highpass', f: 3500, a: 0.03, h: d * 0.4, d: d * 0.5, peak: 0.12 });
+    return this._track(v);
   }
 
   dryFire() {
@@ -634,6 +815,26 @@ export class AudioEngine {
     this._tone(v, v.out, t, { f: 55, f2: 38, a: 0.3, d: 0.9, peak: 0.35 });
   }
 
+  // A crawler hauling itself along (~1.3 s, for now and then): two wet drags of cloth and nails
+  // over the floor, wet clicks, and a low bubbling gurgle in its own voice. Returns a track handle.
+  crawl(pos, seed = 0) {
+    if (!this._ok() || !this._take('crawl', 3, 1.5)) return NOOP_TRACK;
+    const z = this._zv(seed), P = validPos(pos), v = this._voice(P_LOW, P); if (!v) return NOOP_TRACK;
+    const t = this._now(), o = v.out, dur = rand(1.1, 1.4);
+    o.gain.value = 0.38;
+    for (const [dt, k] of [[0, 1], [dur * 0.5, 0.8]]) {
+      this._burst(v, o, t + dt, { kind: 'pink', f: rand(900, 1300), f2: rand(600, 800), q: 1.6, a: 0.12, h: 0.1, d: 0.28, peak: 0.55 * k });
+      this._burst(v, o, t + dt, { kind: 'brown', type: 'lowpass', f: 350, a: 0.1, h: 0.1, d: 0.3, peak: 0.5 * k });
+      this._crackle(v, o, t + dt + 0.05, 0.4, { f: 2600, q: 1.5, count: 10, peak: 0.25 * k, len: 0.01 });
+    }
+    this._crackle(v, o, t, dur, { kind: 'pink', f: 750, q: 1.5, count: 18, peak: 0.4, len: 0.02, fade: 0.4 });
+    const tg = t + 0.15, gd = dur * 0.7, f0 = z.f0 * 0.8;
+    const { src, eg } = this._throat(v, tg, gd, f0, z, { vA: VOWELS[1], vB: VOWELS[2], scale: 0.85, q: 6, rough: rand(9, 14), depth: 0.85 });
+    wobble(src.frequency, tg, gd, f0, 0.12, 5, 0.85);
+    ahr(eg.gain, tg, 0.1, gd * 0.4, gd * 0.45, 2.2);
+    return this._track(v);
+  }
+
   boardBreak(pos) {
     const P = validPos(pos), v = this._voice(P_MED, P); if (!v) return;
     const t = this._now(), o = v.out;
@@ -819,7 +1020,8 @@ export class AudioEngine {
     for (const f of [110, 110.9, 164.2]) this._osc(v, 'triangle', f, t, t + dur + 0.05).connect(lp);
   }
 
-  boxLand(pos) {
+  // The box's roll has settled on a gun: a bright chime.
+  boxReady(pos) {
     const P = validPos(pos), v = this._voice(P_HIGH, P); if (!v) return;
     const t = this._now(), o = v.out;
     o.gain.value = P ? 1 : 0.7;
@@ -827,6 +1029,55 @@ export class AudioEngine {
     this._bell(v, o, t + 0.004, 1567.98 * 1.5 * 1.003, 1.6, 0.12, BELL2);
     this._tone(v, o, t, { f: 220, f2: 110, d: 0.4, peak: 0.3 });
     this._crackle(v, o, t, 0.6, { f: 7000, q: 1, count: 14, peak: 0.12, spread: 1.5 });
+  }
+
+  // The box leaving for somewhere else (~3.5 s): its music-box tune winds down, slowing and
+  // sagging with the escapement ticking, the crate creaks as it lifts, and a flutter rises away.
+  boxLeave(pos) {
+    const P = validPos(pos), v = this._voice(P_HIGH, P); if (!v) return;
+    const t = this._now(), o = v.out, span = 2.3;
+    o.gain.value = P ? 0.9 : 0.5;
+    const tick = this._line(v, o, t, t + span + 0.3, { noise: 'white', type: 'highpass', f: 4500 });
+    for (let tt = 0, i = 0; tt < span && i < 24; i++) {
+      const prog = tt / span, sag = prog * prog;
+      this._bell(v, o, t + tt, semi(880, BOX_MELODY[i % BOX_MELODY.length] + (rand(-8, 8) - 140 * sag) / 100), 1.1, 0.2 * (1 - 0.5 * prog), MUSICBOX);
+      this._lineNote(tick, t + tt, 0.05, 0, { peak: 0.08 * (1 - 0.4 * prog), a: 0.001 });
+      tt += 0.2 * (1 + 2.2 * sag) * rand(0.95, 1.05);
+    }
+    // the crate lifting: a stick-slip creak
+    const tc = t + 1.5, src = this._osc(v, 'sawtooth', 120, tc, tc + 0.85), am = this._g(v, 0.5), eg = this._g(v);
+    wobble(src.frequency, tc, 0.75, 120, 0.14, 6, 1.6);
+    link(this._osc(v, 'square', 22, tc, tc + 0.85), this._g(v, 0.5), am.gain);
+    ahr(eg.gain, tc, 0.08, 0.45, 0.3, 2.2);
+    src.connect(am);
+    for (const [f, q] of [[700, 7], [1450, 6]]) link(am, this._flt(v, 'bandpass', f, q), eg);
+    eg.connect(o);
+    this._tone(v, o, tc + 0.55, { f: 95, f2: 50, d: 0.25, peak: 0.45 });
+    // a flutter rising and receding: wingbeats chopping a band of noise that climbs
+    const tf = t + 2.1, fd = 1.3, fl = this._g(v, 0.5), lfo = this._osc(v, 'square', 15, tf, tf + fd + 0.05), bp = this._flt(v, 'bandpass', 600, 1.2), fg = this._g(v);
+    glide(lfo.frequency, tf, 15, 24, fd);
+    link(lfo, this._g(v, 0.5), fl.gain);
+    glide(bp.frequency, tf, 600, 2600, fd);
+    ahr(fg.gain, tf, 0.1, 0.4, fd - 0.5, 0.9);
+    link(this._noise(v, 'pink', tf, fd + 0.05), bp, fl, fg, o);
+  }
+
+  // The box arriving from somewhere else: a heavy wooden thump, the lid rattling and dust, then a chime.
+  boxLand(pos) {
+    const P = validPos(pos), v = this._voice(P_HIGH, P); if (!v) return;
+    const t = this._now(), o = v.out;
+    o.gain.value = P ? 1 : 0.7;
+    const m = this._g(v, 1);
+    link(m, this._ws(v, this.curves.soft), o);
+    this._tone(v, m, t, { f: 110, f2: 45, sw: 0.2, d: 0.3, peak: 1.2 });
+    this._burst(v, m, t, { kind: 'brown', type: 'lowpass', f: 600, d: 0.35, peak: 0.9 });
+    this._tone(v, o, t, { f: 380, f2: 260, d: 0.1, peak: 0.5 });
+    this._burst(v, o, t, { f: 1800, q: 1.2, d: 0.04, peak: 0.6 });
+    this._crackle(v, o, t + 0.03, 0.3, { f: 2000, q: 1.5, count: 9, peak: 0.4, len: 0.02 });
+    this._burst(v, o, t + 0.05, { kind: 'pink', type: 'highpass', f: 2500, a: 0.05, d: 0.6, peak: 0.1 });
+    this._bell(v, o, t + 0.28, 1567.98, 1.8, 0.25, BELL);
+    this._bell(v, o, t + 0.4, 2349.32, 1.6, 0.18, BELL2);
+    this._crackle(v, o, t + 0.3, 0.7, { f: 7000, q: 1, count: 14, peak: 0.1, spread: 1.5 });
   }
 
   powerupSpawn(pos) {
@@ -1003,14 +1254,24 @@ export class AudioEngine {
 
   // ---- ambience -------------------------------------------------------------------------------
 
-  startAmbience() {
-    if (!this._ok() || this._amb) return;
+  // A map's background on the music bus, fading in over 4 s: 'bunker' (wind, a whistle, a sub
+  // drone, distant shelling and crows) or 'palace' (an empty theatre at night). Starting the kind
+  // already playing does nothing; another kind crossfades to it. stopAmbience(fade) stops either.
+  startAmbience(kind = 'bunker') {
+    const k = AMBIENCES.includes(kind) ? kind : 'bunker';
+    if (!this._ok() || (this._amb && this._amb.kind === k)) return;
+    if (this._amb) this.stopAmbience(2);
     const v = this._voice(P_CRIT, null, this.music); if (!v) return;
     const c = this.ctx, t = c.currentTime, o = v.out, END = Infinity;
     v.bg = true;
     v.end = Infinity;
     o.gain.setValueAtTime(0, t);
     o.gain.linearRampToValueAtTime(1, t + 4);
+    if (k === 'palace') {
+      this._palace(v, t, o);
+      this._amb = { v, kind: k, nextCreak: t + rand(3, 9), nextSettle: t + rand(12, 25), nextDoor: t + rand(15, 35) };
+      return;
+    }
     // wind: pink noise through a wandering bandpass, slow gust swell, slow stereo drift
     const bp = this._flt(v, 'bandpass', 380, 0.8), wg = this._g(v, 0.22);
     const l1 = this._osc(v, 'sine', 0.057, t, END);
@@ -1032,7 +1293,12 @@ export class AudioEngine {
     link(dl, dg, o);
     for (const [f, type] of [[41.2, 'sine'], [43.65, 'triangle'], [61.74, 'sine']]) this._osc(v, type, f, t, END).connect(dl);
     link(this._osc(v, 'sine', 0.07, t, END), this._g(v, 0.04), dg.gain);
-    this._amb = { v, nextRumble: t + rand(6, 15), nextCrow: t + rand(30, 70) };
+    this._amb = { v, kind: k, nextRumble: t + rand(6, 15), nextCrow: t + rand(30, 70) };
+  }
+
+  // The same as startAmbience(kind), named for the map.
+  ambience(kind = 'bunker') {
+    this.startAmbience(kind);
   }
 
   stopAmbience(fade = 2) {
@@ -1042,11 +1308,14 @@ export class AudioEngine {
   }
 
   // Leaving a match: every sound of that world fades out. Voices, ambience, the
-  // boss music and the low-health heartbeat and muffle all stop, so nothing
-  // follows the player back to the menu.
+  // boss music (and its scheduler), traps, jingles and the low-health heartbeat
+  // and muffle all stop, so nothing follows the player back to the menu.
   silence(fade = 0.3) {
     this.stopAmbience(fade);
+    if (this._boss) this._boss.handle.stop(fade);
     this._boss = null;
+    this._loops = [];
+    this._jingles = {};
     this.setHeartbeat(0);
     if (!this.ctx) return;
     for (const v of [...this.voices]) if (!v.dying) this._kill(v, fade);
@@ -1085,6 +1354,88 @@ export class AudioEngine {
     link(src, this._ws(v, this.curves.hard), g);
     for (const [f, q] of [[1250, 3], [2300, 4]]) link(g, this._flt(v, 'bandpass', f, q), lp);
     lp.connect(v.out);
+  }
+
+  // The Picture Palace bed: wind leaking through the lobby doors off to the left (gusts, and a
+  // whistle in the gap that swells with them), the projector still running up in the booth to the
+  // right (motor hum with a little wow, the gate chattering at 24 frames a second, through the
+  // wall), and the low room tone of an empty hall.
+  _palace(v, t, out) {
+    const o = this._g(v, 2);
+    o.connect(out);
+    const END = Infinity, door = this._pan(v, -0.5), gust = this._osc(v, 'sine', 0.071, t, END);
+    door.connect(o);
+    const bp = this._flt(v, 'bandpass', 480, 1), wg = this._g(v, 0.14);
+    link(gust, this._g(v, 0.08), wg.gain);
+    link(this._osc(v, 'sine', 0.043, t, END), this._g(v, 150), bp.frequency);
+    link(this._noise(v, 'pink', t, END), bp, wg, door);
+    const wh = this._flt(v, 'bandpass', 940, 16), whg = this._g(v, 0.012);
+    link(gust, this._g(v, 0.011), whg.gain);
+    link(gust, this._g(v, 60), wh.frequency);
+    link(this._noise(v, 'white', t, END), wh, whg, door);
+    const booth = this._pan(v, 0.4), bl = this._flt(v, 'lowpass', 1100, 0.7);
+    link(bl, this._g(v, 0.05), booth, o);
+    const mot = this._osc(v, 'sawtooth', 47, t, END);
+    link(this._osc(v, 'sine', 0.27, t, END), this._g(v, 7), mot.detune);
+    link(mot, this._g(v, 0.8), bl);
+    const cl = this._g(v, 0.5);
+    link(this._osc(v, 'square', 24, t, END), this._g(v, 0.5), cl.gain);
+    link(this._noise(v, 'white', t, END), this._flt(v, 'bandpass', 1300, 1.4), cl, this._g(v, 0.7), bl);
+    const rg = this._g(v, 0.11);
+    link(this._noise(v, 'brown', t, END), this._flt(v, 'lowpass', 130, 0.7), rg, o);
+    link(this._osc(v, 'sine', 0.05, t, END), this._g(v, 0.04), rg.gain);
+  }
+
+  // Palace night noises, scheduled by update(). A timber creak somewhere in the dark, sometimes two.
+  _creak(t) {
+    const v = this._voice(P_LOW, null, this.music, rand(-0.9, 0.9)); if (!v) return;
+    const o = v.out, n = Math.random() < 0.35 ? 2 : 1;
+    o.gain.value = rand(0.45, 0.75);
+    for (let i = 0, tt = t; i < n; i++, tt += rand(0.6, 0.9)) {
+      const d = rand(0.35, 0.8), f = rand(80, 150), end = tt + d + 0.05, src = this._osc(v, 'sawtooth', f, tt, end);
+      wobble(src.frequency, tt, d, f, 0.1, 5, rand(1.2, 1.6));
+      const am = this._g(v, 0.5), eg = this._g(v);
+      link(this._osc(v, 'square', rand(16, 30), tt, end), this._g(v, 0.5), am.gain);
+      ahr(eg.gain, tt, d * 0.3, d * 0.3, d * 0.4, 2);
+      src.connect(am);
+      for (const [ff, q] of [[rand(550, 850), 7], [rand(1250, 1750), 6]]) link(am, this._flt(v, 'bandpass', ff, q), eg);
+      eg.connect(o);
+    }
+  }
+
+  // The old building settling: a low structural groan, a few ticks, dust trickling down.
+  _settle(t) {
+    const v = this._voice(P_LOW, null, this.music, rand(-0.7, 0.7)); if (!v) return;
+    const o = v.out, d = rand(1.2, 2), f = rand(34, 48);
+    o.gain.value = rand(0.55, 0.8);
+    const src = this._osc(v, 'sawtooth', f, t, t + d + 0.05), eg = this._g(v);
+    wobble(src.frequency, t, d, f, 0.08, 4, 0.9);
+    ahr(eg.gain, t, d * 0.4, d * 0.2, d * 0.4, 0.8);
+    link(src, this._flt(v, 'bandpass', 170, 4), eg, o);
+    for (let i = 0; i < 3; i++) {
+      const tt = t + rand(0.2, d);
+      this._tone(v, o, tt, { f: rand(900, 1600), d: 0.03, peak: 0.12 });
+      this._burst(v, o, tt, { f: 2400, q: 2, d: 0.015, peak: 0.25 });
+    }
+    this._crackle(v, o, t + d * 0.5, d, { kind: 'pink', f: 3200, q: 1, count: 22, peak: 0.12, spread: 1.3, fade: 0.8 });
+  }
+
+  // The lobby doors rattling in a gust: wind swelling through the gap, chain and handles, the
+  // doors knocking against their frame.
+  _doorGust(t) {
+    const v = this._voice(P_LOW, null, this.music, rand(-0.7, -0.3)); if (!v) return;
+    const o = v.out, n = this._noise(v, 'pink', t, 2.3), bp = this._flt(v, 'bandpass', 350, 1.2), g = this._g(v);
+    o.gain.value = rand(0.5, 0.8);
+    bp.frequency.setValueAtTime(350, t);
+    bp.frequency.exponentialRampToValueAtTime(1000, t + 0.9);
+    bp.frequency.exponentialRampToValueAtTime(420, t + 2.2);
+    ahr(g.gain, t, 0.8, 0.3, 1.1, 0.9);
+    link(n, bp, g, o);
+    const tr = t + rand(0.6, 0.9);
+    this._crackle(v, o, tr, 0.5, { f: 3000, q: 2.5, count: 16, peak: 0.45, spread: 1.2, len: 0.025 });
+    this._tone(v, o, tr + 0.1, { f: 105, f2: 65, d: 0.18, peak: 0.7 });
+    this._burst(v, o, tr + 0.1, { kind: 'brown', type: 'lowpass', f: 500, d: 0.15, peak: 0.5 });
+    this._tone(v, o, tr + 0.35, { f: 95, f2: 60, d: 0.14, peak: 0.4 });
   }
 
   // Easter egg: original D-minor waltz through a radio band-limit with vinyl crackle and wow.
@@ -1570,6 +1921,298 @@ export class AudioEngine {
     this._burst(v, o, t, { kind: 'pink', type: 'highpass', f: 5000, a: 0.15, d: 0.7, peak: 0.08 });
   }
 
+  // ---- the Picture Palace: power, perks, forge, teleporter, traps ------------------------------
+
+  // The main breaker thrown (~5 s, everyone hears it, not positional): a heavy clunk, a surge
+  // that buzzes and arcs, generators spooling up and chugging faster, and the lights clacking on
+  // one after another, near to far across the stereo field, each with its ballast hum.
+  powerOn() {
+    const v = this._voice(P_CRIT); if (!v) return;
+    const t = this._now(), o = v.out;
+    o.gain.value = 0.75;
+    const m = this._g(v, 1);
+    link(m, this._ws(v, this.curves.soft), o);
+    this._burst(v, m, t, { f: 1500, q: 1, d: 0.06, peak: 1.1 });
+    this._tone(v, m, t, { f: 140, f2: 48, sw: 0.25, d: 0.35, peak: 1.2 });
+    this._burst(v, m, t, { kind: 'brown', type: 'lowpass', f: 400, d: 0.3, peak: 0.8 });
+    this._burst(v, o, t + 0.035, { f: 3100, q: 4, d: 0.02, peak: 0.6 });
+    // the surge
+    const ts = t + 0.08, se = ts + 1.45, bz = this._osc(v, 'sawtooth', 40, ts, se), ring = this._g(v, 0), bg = this._g(v);
+    bz.frequency.setValueAtTime(40, ts);
+    bz.frequency.exponentialRampToValueAtTime(130, ts + 0.35);
+    bz.frequency.exponentialRampToValueAtTime(120, ts + 1.3);
+    this._osc(v, 'square', 1250, ts, se).connect(ring.gain);
+    ahr(bg.gain, ts, 0.05, 0.35, 0.9, 0.35);
+    link(bz, ring, this._flt(v, 'bandpass', 1400, 0.7), bg, o);
+    this._crackle(v, o, ts, 0.9, { f: 4200, q: 0.7, count: 45, peak: 0.6, spread: 1.4, len: 0.008, fade: 0.8 });
+    this._burst(v, o, ts, { type: 'highpass', f: 2500, a: 0.01, d: 0.5, peak: 0.3 });
+    this._tone(v, o, ts, { f: 60, a: 0.05, h: 0.4, d: 1.2, peak: 0.35 });
+    this._tone(v, o, ts, { f: 120, a: 0.05, h: 0.3, d: 1.0, peak: 0.12 });
+    // generators: the motor and its whine climbing, the engine chugging faster
+    const tg = t + 0.3, gd = 3.6, ge = tg + gd + 0.05;
+    const gen = this._osc(v, 'sawtooth', 18, tg, ge), gl = this._flt(v, 'lowpass', 200, 1.2), gg = this._g(v);
+    glide(gen.frequency, tg, 18, 95, 2.2);
+    glide(gl.frequency, tg, 200, 900, 2.2);
+    ahr(gg.gain, tg, 1.2, 1.4, 1.0, 0.4);
+    link(gen, gl, gg, o);
+    const wh = this._osc(v, 'sine', 150, tg, ge), wg = this._g(v);
+    glide(wh.frequency, tg, 150, 1140, 2.4);
+    ahr(wg.gain, tg, 1.4, 1.2, 1.0, 0.035);
+    link(wh, wg, o);
+    const ch = this._g(v, 0.5), lfo = this._osc(v, 'square', 4, tg, ge), cg = this._g(v);
+    glide(lfo.frequency, tg, 4, 22, 2.2);
+    link(lfo, this._g(v, 0.5), ch.gain);
+    ahr(cg.gain, tg, 0.6, 1.6, 1.3, 0.5);
+    link(this._noise(v, 'brown', tg, gd), this._flt(v, 'lowpass', 420, 0.8), ch, cg, o);
+    // the lights: relay clack, a flicker, then the hum, each farther (duller, quieter) than the last
+    const he = t + 5.2;
+    [[1.0, -0.2, 1], [1.35, 0.5, 0.85], [1.7, -0.7, 0.7], [2.0, 0.8, 0.6], [2.3, -0.4, 0.5], [2.6, 0.3, 0.4]].forEach(([dt, pan, k]) => {
+      const tl = t + dt, lp = this._flt(v, 'lowpass', 1500 + 4000 * k, 0.7), sp = this._pan(v, pan);
+      link(lp, sp, o);
+      this._burst(v, lp, tl, { f: 2400, q: 3, d: 0.03, peak: 0.7 * k });
+      this._tone(v, lp, tl, { f: 180, f2: 90, d: 0.06, peak: 0.4 * k });
+      const hum = this._osc(v, 'sawtooth', 120 * rand(0.995, 1.005), tl, he), hg = this._g(v), pk = 0.035 * k;
+      hg.gain.setValueAtTime(EPS, tl);
+      hg.gain.linearRampToValueAtTime(pk, tl + 0.03);
+      hg.gain.setValueAtTime(pk * 0.15, tl + 0.08);
+      hg.gain.linearRampToValueAtTime(pk, tl + 0.14);
+      hg.gain.setValueAtTime(pk, tl + 0.6);
+      hg.gain.exponentialRampToValueAtTime(EPS, he);
+      link(hum, this._flt(v, 'bandpass', 360, 2), hg, lp);
+    });
+  }
+
+  // A perk machine's jingle (~9 s, original tunes, from the machine on the music bus): ironclad a
+  // brass oompah march, lazarus a celesta waltz, quicksilver honky-tonk ragtime, hairtrigger a
+  // saloon-western strut. An unknown perk borrows one of the four. Starting a perk's jingle again
+  // replaces the one playing. Returns { stop(fade = 0.4) }.
+  perkJingle(perkId, pos) {
+    if (!this._ok()) return NOOP_HANDLE;
+    const key = String(perkId), old = this._jingles[key];
+    if (old) old.stop(0.3);
+    const P = validPos(pos), v = this._voice(P_HIGH, P, this.music, null, true); if (!v) return NOOP_HANDLE;
+    const style = JINGLES[key] || JINGLES[PERK_JINGLES[Math.abs(seedInt(key)) % PERK_JINGLES.length]];
+    v.out.gain.value = P ? 1 : 0.55;
+    this[style](v, this._now() + 0.05);
+    const h = {
+      stop: (fade = 0.4) => {
+        if (this._jingles[key] === h) delete this._jingles[key];
+        if (this.ctx) this._kill(v, clamp(fin(fade, 0.4), 0.02, 4));
+      },
+    };
+    this._jingles[key] = h;
+    return h;
+  }
+
+  // The local player drinking a perk: the cap prised off with a pop and a fizz, four glugs with a
+  // swallow each, the bottle's glassy clink, and a satisfied "ahh".
+  perkDrink() {
+    const v = this._voice(P_HIGH, null, this.dry); if (!v) return;
+    const t = this._now(), o = v.out;
+    o.gain.value = 0.6;
+    this._burst(v, o, t, { f: 3600, q: 3, d: 0.012, peak: 0.8 });
+    this._tone(v, o, t + 0.02, { f: 520, f2: 1150, sw: 0.02, d: 0.05, peak: 0.45 });
+    this._burst(v, o, t + 0.02, { f: 1300, q: 3, d: 0.03, peak: 0.6 });
+    this._tone(v, o, t + 0.03, { f: 3870, d: 0.12, peak: 0.05 });
+    this._tone(v, o, t + 0.03, { f: 5710, d: 0.08, peak: 0.03 });
+    this._burst(v, o, t + 0.04, { type: 'highpass', f: 5000, a: 0.02, h: 0.15, d: 0.5, peak: 0.16 });
+    this._crackle(v, o, t + 0.05, 0.6, { f: 6500, q: 1, count: 30, peak: 0.12, fade: 0.9 });
+    for (let i = 0; i < 4; i++) {
+      const tg = t + 0.5 + i * 0.21 + rand(-0.015, 0.015), f = 170 + i * 18;
+      this._tone(v, o, tg, { f, f2: f * 2.3, sw: 0.06, a: 0.005, d: 0.08, peak: 0.5 });
+      this._burst(v, o, tg, { kind: 'pink', f: 380 + i * 30, q: 3, a: 0.01, d: 0.09, peak: 0.5 });
+      this._tone(v, o, tg + 0.1, { f: 110, f2: 70, d: 0.06, peak: 0.35 });
+    }
+    const tc = t + 1.45;
+    this._burst(v, o, tc, { type: 'highpass', f: 4000, d: 0.005, peak: 0.5 });
+    this._bell(v, o, tc, 2380, 0.5, 0.06, GLASS);
+    // "ahh": breath through the vowel's formants, with a little voice under it
+    const te = t + 1.6, ed = 0.75, eg = this._g(v), n = this._noise(v, 'pink', te, ed + 0.05);
+    ahr(eg.gain, te, 0.07, 0.2, ed - 0.27, 0.9);
+    for (const [f, q] of [[800, 4], [1150, 5], [2500, 6]]) link(n, this._flt(v, 'bandpass', f, q), eg);
+    eg.connect(o);
+    const hum = this._osc(v, 'sawtooth', 128, te, te + ed), hg = this._g(v);
+    glide(hum.frequency, te, 128, 104, ed);
+    ahr(hg.gain, te + 0.02, 0.06, 0.15, 0.4, 0.5);
+    for (const [f, q] of [[730, 5], [1090, 6]]) link(hum, this._flt(v, 'bandpass', f, q), hg);
+    hg.connect(o);
+  }
+
+  // The upgrade forge. 'take': the gun clanks into the furnace and the flames whoosh up; 'work':
+  // ~3.5 s of hammer-press slams (hiss, slam, clang; heavy, light, the last one hardest) over a
+  // flickering roar; 'done': a bright anvil ring and a chord climbing over it.
+  forge(stage = 'take', pos) {
+    const P = validPos(pos), v = this._voice(P_HIGH, P); if (!v) return;
+    const t = this._now(), o = v.out;
+    o.gain.value = (P ? 1 : 0.6) * (stage === 'done' ? 1.7 : stage === 'work' ? 0.72 : 0.8);
+    if (stage === 'work') {
+      const d = 3.5, fg = this._g(v, 0);
+      fg.gain.setValueAtTime(EPS, t);
+      fg.gain.linearRampToValueAtTime(0.7, t + 0.3);
+      for (let tt = t + 0.3; tt < t + d - 0.5;) { tt += rand(0.08, 0.2); fg.gain.linearRampToValueAtTime(rand(0.45, 0.9), tt); }
+      fg.gain.exponentialRampToValueAtTime(EPS, t + d + 0.3);
+      link(this._noise(v, 'brown', t, d + 0.35), this._flt(v, 'lowpass', 650, 0.7), fg, o);
+      this._burst(v, o, t, { kind: 'pink', f: 1200, q: 0.7, a: 0.3, h: d - 0.6, d: 0.6, peak: 0.18 });
+      this._crackle(v, o, t, d, { kind: 'pink', f: 2200, q: 1, count: 40, peak: 0.35, len: 0.015, fade: 0.2 });
+      const m = this._g(v, 1);
+      link(m, this._ws(v, this.curves.soft), o);
+      for (let i = 0; i < 6; i++) {
+        const ts = t + 0.35 + i * 0.52, k = i === 5 ? 1.2 : i % 2 ? 0.7 : 1;
+        this._burst(v, o, ts - 0.16, { type: 'highpass', f: 3200, a: 0.1, d: 0.06, peak: 0.12 * k });
+        this._tone(v, m, ts, { f: 105, f2: 40, sw: 0.16, d: 0.24, peak: 1.0 * k });
+        this._burst(v, m, ts, { kind: 'brown', type: 'lowpass', f: 900, d: 0.12, peak: 0.8 * k });
+        this._burst(v, o, ts, { f: 1700, q: 1.5, d: 0.04, peak: 0.7 * k });
+        this._bell(v, o, ts, 410 * rand(0.98, 1.02), 0.45, 0.07 * k, CLANK);
+      }
+    } else if (stage === 'done') {
+      this._burst(v, o, t, { type: 'highpass', f: 3500, d: 0.006, peak: 1 });
+      this._burst(v, o, t, { f: 2600, q: 1.5, d: 0.03, peak: 0.8 });
+      this._tone(v, o, t, { f: 300, f2: 160, d: 0.06, peak: 0.4 });
+      this._bell(v, o, t, 1046.5, 2.4, 0.12, ANVIL);
+      const lp = this._flt(v, 'lowpass', 700, 1);
+      glide(lp.frequency, t + 0.1, 700, 5000, 1.0);
+      lp.connect(o);
+      this._tone(v, lp, t + 0.1, { wave: 'organ', f: 130.81, a: 0.05, h: 0.9, d: 1.0, peak: 0.06 });
+      [261.63, 329.63, 392, 523.25, 659.25, 783.99, 1046.5].forEach((f, i) => {
+        this._tone(v, lp, t + 0.1 + i * 0.075, { wave: 'organ', f, a: 0.02, h: 0.9 - i * 0.06, d: 0.9, peak: 0.045 });
+      });
+      this._crackle(v, o, t + 0.5, 1.2, { f: 7500, q: 1.2, count: 24, peak: 0.15, fade: 0.8 });
+    } else {
+      this._burst(v, o, t, { f: 2200, q: 2, d: 0.03, peak: 0.9 });
+      this._tone(v, o, t, { f: 240, f2: 130, d: 0.08, peak: 0.6 });
+      this._bell(v, o, t, 620, 0.5, 0.09, CLANK);
+      this._burst(v, o, t + 0.12, { f: 2600, q: 3, d: 0.02, peak: 0.5 });
+      const tf = t + 0.18;
+      this._burst(v, o, tf, { kind: 'pink', f: 250, f2: 1500, q: 0.9, a: 0.15, h: 0.15, d: 0.8, peak: 1.0 });
+      this._burst(v, o, tf, { kind: 'brown', type: 'lowpass', f: 700, a: 0.08, h: 0.2, d: 0.9, peak: 0.9 });
+      this._crackle(v, o, tf + 0.1, 1.0, { kind: 'pink', f: 2000, q: 1, count: 22, peak: 0.35, len: 0.015, fade: 0.6 });
+    }
+  }
+
+  // The Magic Lantern teleporter. 'link': the pad's lever (a relay clack, a rising beep); 'linked':
+  // a confirming chime over the projector motor; 'charge': the projector spinning up (~2 s);
+  // 'warp': a flash-bang of light as sound, a reversed rush into a deep boom and ringing ears;
+  // 'return': a rush the other way into a softer landing while the projector runs down.
+  teleport(stage = 'warp', pos) {
+    const P = validPos(pos), v = this._voice(P_HIGH, P); if (!v) return;
+    const t = this._now(), o = v.out;
+    o.gain.value = (P ? 1 : 0.6) * (stage === 'warp' ? 0.8 : stage === 'link' ? 1.3 : 1);
+    if (stage === 'link') {
+      this._burst(v, o, t, { f: 2600, q: 4, d: 0.02, peak: 0.9 });
+      this._burst(v, o, t + 0.012, { f: 1100, q: 2, d: 0.035, peak: 0.7 });
+      this._tone(v, o, t, { f: 380, f2: 190, d: 0.04, peak: 0.4 });
+      const b = this._osc(v, 'square', 620, t + 0.12, t + 0.6), bg = this._g(v);
+      glide(b.frequency, t + 0.12, 620, 1240, 0.4);
+      ahr(bg.gain, t + 0.12, 0.01, 0.34, 0.08, 0.07);
+      link(b, this._flt(v, 'lowpass', 2600, 0.7), bg, o);
+    } else if (stage === 'linked') {
+      this._bell(v, o, t, 1046.5, 1.2, 0.12, BELL2);
+      this._bell(v, o, t + 0.13, 1568, 1.5, 0.12, BELL2);
+      this._projector(v, o, t + 0.05, 1.5, [58, 60], [24, 24], [0.2, 0.9, 0.4], 0.5);
+    } else if (stage === 'charge') {
+      this._projector(v, o, t, 2.1, [18, 72], [3, 30], [1.4, 0.55, 0.15], 0.7);
+      const hm = this._osc(v, 'sine', 110, t, t + 2.15), hg = this._g(v);
+      glide(hm.frequency, t, 110, 440, 2);
+      ahr(hg.gain, t, 1.7, 0.2, 0.2, 0.12);
+      link(hm, hg, o);
+      this._crackle(v, o, t + 1.1, 1.0, { f: 4800, q: 0.8, count: 26, peak: 0.35, spread: 0.5, len: 0.006, fade: -0.6 });
+    } else if (stage === 'return') {
+      const tl = t + 0.45, n = this._noise(v, 'pink', t, 0.5), bp = this._flt(v, 'bandpass', 3500, 0.9), g = this._g(v);
+      glide(bp.frequency, t, 3500, 500, 0.45);
+      g.gain.setValueAtTime(0.01, t);
+      g.gain.exponentialRampToValueAtTime(0.8, tl);
+      g.gain.exponentialRampToValueAtTime(EPS, tl + 0.03);
+      link(n, bp, g, o);
+      this._tone(v, o, tl, { f: 90, f2: 36, sw: 0.4, d: 0.5, peak: 0.9 });
+      this._burst(v, o, tl, { kind: 'brown', type: 'lowpass', f: 500, d: 0.5, peak: 0.7 });
+      this._projector(v, o, tl, 1.6, [70, 14], [24, 2], [0.01, 0.4, 1.2], 0.5);
+      this._bell(v, o, tl + 0.05, 1568, 1.2, 0.07, BELL2);
+      this._bell(v, o, tl + 0.18, 1046.5, 1.4, 0.07, BELL2);
+    } else {
+      const tw = t + 0.7, n = this._noise(v, 'white', t, 0.75), hp = this._flt(v, 'highpass', 1500, 0.7), g = this._g(v);
+      glide(hp.frequency, t, 1500, 6000, 0.7);
+      g.gain.setValueAtTime(0.01, t);
+      g.gain.exponentialRampToValueAtTime(0.7, tw);
+      g.gain.exponentialRampToValueAtTime(EPS, tw + 0.02);
+      link(n, hp, g, o);
+      for (const f of [880, 1318.5, 1975.5, 2637]) this._swell(v, o, t + 0.1, tw, f, 0.035);
+      const m = this._g(v, 1);
+      link(m, this._ws(v, this.curves.soft), o);
+      this._tone(v, m, tw, { f: 64, f2: 24, sw: 0.9, a: 0.004, d: 1.4, peak: 1.3 });
+      this._burst(v, m, tw, { kind: 'brown', type: 'lowpass', f: 700, f2: 90, a: 0.004, d: 1.5, peak: 1.2 });
+      this._burst(v, o, tw, { type: 'highpass', f: 2500, a: 0.002, d: 0.35, peak: 0.6 });
+      this._tone(v, o, tw + 0.05, { f: 3950, a: 0.08, d: 1.8, peak: 0.025 });
+      this._tone(v, o, tw + 0.05, { f: 3957, a: 0.08, d: 1.8, peak: 0.02 });
+    }
+  }
+
+  // A Spark Gate running: a contactor clunk, then a loud mains buzz, ring-modulated and wavering,
+  // with crackle and bigger arcs tearing through it. It loops with no scheduling (random noise
+  // read slowly through gate curves), until stop() or silence(). Returns { stop(fade = 0.35) }.
+  trap(pos) {
+    if (!this._ok()) return NOOP_HANDLE;
+    const P = validPos(pos), v = this._voice(P_HIGH, P, this.sfx, null, true); if (!v) return NOOP_HANDLE;
+    const t = this._now(), END = Infinity, o = v.out, lvl = P ? 1.5 : 0.8;
+    v.bg = true;
+    v.end = Infinity;
+    o.gain.setValueAtTime(0, t);
+    o.gain.linearRampToValueAtTime(lvl, t + 0.06);
+    this._burst(v, o, t, { f: 1600, q: 1.2, d: 0.05, peak: 0.8 });
+    this._tone(v, o, t, { f: 160, f2: 70, d: 0.12, peak: 0.6 });
+    // slow random wander: pitch, tone and level
+    const wander = this._noise(v, 'white', t, END, 0.0004);
+    const bz = this._osc(v, 'sawtooth', 120, t, END), sq = this._osc(v, 'square', 60, t, END);
+    const ring = this._g(v, 0.35), bf = this._flt(v, 'bandpass', 1100, 0.6), bg = this._g(v, 0.16);
+    this._osc(v, 'sine', 1375, t, END).connect(ring.gain);
+    bz.connect(ring);
+    link(sq, this._g(v, 0.5), ring);
+    link(ring, bf, this._ws(v, this.curves.hard), bg, o);
+    for (const [dest, amt] of [[bz.detune, 40], [sq.detune, 40], [bf.frequency, 500], [bg.gain, 0.06]]) link(wander, this._g(v, amt), dest);
+    // crackle: sparse spikes open a band of noise; arcs: rarer, bigger, a snap and a buzz boost
+    const cg = this._g(v, 0);
+    link(this._noise(v, 'white', t, END, 0.005), this._ws(v, this.curves.gate), this._g(v, 0.55), cg.gain);
+    link(this._noise(v, 'white', t, END), this._flt(v, 'bandpass', 4200, 0.7), cg, o);
+    const arc = this._ws(v, this.curves.arc), ag = this._g(v, 0);
+    link(this._noise(v, 'white', t, END, 0.0008), arc);
+    link(arc, this._g(v, 0.7), ag.gain);
+    link(arc, this._g(v, 0.2), bg.gain);
+    link(this._noise(v, 'white', t, END), this._flt(v, 'highpass', 2400, 0.7), ag, o);
+    return {
+      stop: (fade = 0.35) => {
+        if (v.dying || v.done || !this.ctx) return;
+        const f = clamp(fin(fade, 0.35), 0.02, 4), now = this.ctx.currentTime;
+        for (const p of [bz.frequency, sq.frequency]) {
+          p.cancelScheduledValues(now);
+          p.setValueAtTime(p.value, now);
+          p.exponentialRampToValueAtTime(p.value * 0.4, now + f);
+        }
+        this._kill(v, f);
+      },
+    };
+  }
+
+  // A zombie frying in a Spark Gate: a hard snap and jolt, a stuttering buzz through the body,
+  // dense crackle and a sizzle.
+  trapZap(pos) {
+    if (!this._ok() || !this._take('tzap', 4, 5)) return;
+    const P = validPos(pos), v = this._voice(P_MED, P); if (!v) return;
+    const t = this._now(), o = v.out, d = rand(0.7, 1.0), end = t + d + 0.05;
+    o.gain.value = P ? 0.8 : 0.5;
+    const m = this._g(v, 1);
+    link(m, this._ws(v, this.curves.hard), this._g(v, 0.7), o);
+    this._burst(v, m, t, { type: 'highpass', f: 2800, d: 0.01, peak: 1.2 });
+    this._tone(v, m, t, { f: 150, f2: 60, d: 0.12, peak: 0.7 });
+    const bz = this._osc(v, 'sawtooth', 90, t, end), ring = this._g(v, 0), st = this._g(v, 0.5), bg = this._g(v);
+    this._osc(v, 'square', 1150, t, end).connect(ring.gain);
+    link(this._osc(v, 'square', rand(14, 19), t, end), this._g(v, 0.5), st.gain);
+    wobble(bz.frequency, t, d, 90, 0.15, 6, 0.6);
+    env(bg.gain, t, 0.005, d - 0.05, 0.4);
+    link(bz, ring, this._flt(v, 'bandpass', 1500, 0.7), st, bg, o);
+    this._crackle(v, o, t, d, { f: 3800, q: 0.7, count: 40, peak: 0.6, spread: 1.2, len: 0.008, fade: 0.6 });
+    this._burst(v, o, t + 0.05, { kind: 'pink', type: 'highpass', f: 2200, a: 0.05, d, peak: 0.25 });
+    this._burst(v, o, t, { kind: 'pink', type: 'lowpass', f: 500, d: 0.15, peak: 0.5 });
+  }
+
   // ---- internals: graph -----------------------------------------------------------------------
 
   _build() {
@@ -1595,7 +2238,7 @@ export class AudioEngine {
     this.music.connect(this.master);
     this.dry = c.createGain();
     this.dry.connect(this.master);
-    this.curves = { soft: driveCurve(2), hard: driveCurve(6), fuzz: driveCurve(16) };
+    this.curves = { soft: driveCurve(2), hard: driveCurve(6), fuzz: driveCurve(16), gate: gateCurve(0.72), arc: gateCurve(0.86) };
     if (typeof c.createPeriodicWave === 'function') {
       const imag = new Float32Array([0, 1, 0.8, 0.5, 0.3, 0.12, 0.2, 0, 0.1]);
       this._organWave = c.createPeriodicWave(new Float32Array(imag.length), imag);
@@ -1613,6 +2256,10 @@ export class AudioEngine {
       const s2 = c.createGain();
       s2.gain.value = 0.32;
       link(this.music, s2, conv);
+      // Room feed for positional voices on the music bus (perk jingles): follows the music volume.
+      this.mrev = c.createGain();
+      this.mrev.gain.value = this._muv;
+      this.mrev.connect(conv);
     }
     // buffers last: _ok() requires them, so a partial build never plays
     this.buf = { white: this._noiseBuf('white'), pink: this._noiseBuf('pink'), brown: this._noiseBuf('brown') };
@@ -1698,7 +2345,8 @@ export class AudioEngine {
   }
 
   // New voice: out gain -> [distance lowpass -> panner | stereo pan] -> bus. Null when refused.
-  _voice(prio, pos = null, bus = this.sfx, pan = null) {
+  // `live`: a long positional loop; update() keeps re-measuring its walls and air (_reaim).
+  _voice(prio, pos = null, bus = this.sfx, pan = null, live = false) {
     if (!this._ok()) return null;
     const P = validPos(pos);
     let d = 0;
@@ -1714,19 +2362,16 @@ export class AudioEngine {
     v.out = this._g(v, 1);
     let tail = v.out;
     if (P) {
-      // Walls between us muffle and quieten; distance dulls the top end (air absorption).
-      let occ = 0;
-      if (this.occlusion) { try { occ = clamp(fin(this.occlusion(P.x, P.y, P.z)), 0, 1); } catch { occ = 0; } }
-      const air = d > 4 ? clamp(18000 * Math.pow(4 / d, 1.2), 1100, 20000) : 20000;
-      const cutoff = occ > 0 ? Math.min(air, 500 + 1300 * (1 - occ)) : air;
-      if (cutoff < 19000) tail = link(tail, this._flt(v, 'lowpass', cutoff, 0.6));
-      tail = link(tail, this._g(v, SPATIAL_GAIN * (1 - 0.6 * occ)));
+      const ac = this._acoustic(P, d);
+      if (ac.cutoff < 19000 || live) tail = link(tail, (v.air = this._flt(v, 'lowpass', ac.cutoff, 0.6)));
+      tail = link(tail, (v.mk = this._g(v, ac.mk)));
       // Room feed: steady level while the direct sound falls off, so far sounds read as far.
       if (this.revIn) {
-        const send = this._g(v, 0.035 * (1 + occ) * clamp(1.15 - d / 60, 0.45, 1));
+        const send = (v.send = this._g(v, ac.send));
         tail.connect(send);
-        send.connect(this.revIn);
+        send.connect(bus === this.music && this.mrev ? this.mrev : this.revIn);
       }
+      if (live) { v.pos = { x: P.x, y: P.y, z: P.z }; this._loops.push(v); }
       const p = c.createPanner();
       p.panningModel = this.hrtf && d < HRTF_DIST ? 'HRTF' : 'equalpower';
       p.distanceModel = 'exponential';
@@ -1745,6 +2390,27 @@ export class AudioEngine {
     }
     tail.connect(bus || this.sfx);
     return v;
+  }
+
+  // Walls between us muffle and quieten; distance dulls the top end (air absorption). Returns the
+  // lowpass cutoff, the makeup gain after the walls, and the room send level for a source at P.
+  _acoustic(P, d) {
+    let occ = 0;
+    if (this.occlusion) { try { occ = clamp(fin(this.occlusion(P.x, P.y, P.z)), 0, 1); } catch { occ = 0; } }
+    const air = d > 4 ? clamp(18000 * Math.pow(4 / d, 1.2), 1100, 20000) : 20000;
+    return {
+      cutoff: occ > 0 ? Math.min(air, 500 + 1300 * (1 - occ)) : air,
+      mk: SPATIAL_GAIN * (1 - 0.6 * occ),
+      send: 0.035 * (1 + occ) * clamp(1.15 - d / 60, 0.45, 1),
+    };
+  }
+
+  // A long loop (a trap, a jingle) re-measured as the listener moves around it (update, 5 Hz).
+  _reaim(v, now) {
+    const P = v.pos, L = this._L, ac = this._acoustic(P, Math.hypot(P.x - L.x, P.y - L.y, P.z - L.z));
+    if (v.air) v.air.frequency.setTargetAtTime(ac.cutoff, now, 0.1);
+    if (v.mk) v.mk.gain.setTargetAtTime(ac.mk, now, 0.1);
+    if (v.send) v.send.gain.setTargetAtTime(ac.send, now, 0.1);
   }
 
   _kill(v, fade = 0.05) {
@@ -2044,10 +2710,175 @@ export class AudioEngine {
     }
     this._bell(v, v.out, t, semi(220, LULLABY_BASS[bar % 4] + shift), 1.8, 0.07, CELESTA);
   }
+
+  // ---- internals: projector and perk jingles --------------------------------------------------
+
+  // A film projector running from f0 to f1 Hz (motor hum and its whine) with the gate's clatter
+  // chopping a band of noise c0..c1 times a second; `env` = [attack, hold, release].
+  _projector(v, dest, t, dur, [f0, f1], [c0, c1], [a, h, r], peak) {
+    const end = t + dur + 0.05, eg = this._g(v);
+    ahr(eg.gain, t, a, h, r, peak);
+    eg.connect(dest);
+    const m = this._osc(v, 'sawtooth', f0, t, end);
+    glide(m.frequency, t, f0, f1, dur);
+    link(m, this._flt(v, 'lowpass', 900, 0.8), this._g(v, 0.35), eg);
+    const w = this._osc(v, 'sine', f0 * 12, t, end);
+    glide(w.frequency, t, f0 * 12, f1 * 12, dur);
+    link(w, this._g(v, 0.05), eg);
+    const ch = this._g(v, 0.5), lfo = this._osc(v, 'square', c0, t, end);
+    glide(lfo.frequency, t, c0, c1, dur);
+    link(lfo, this._g(v, 0.5), ch.gain);
+    link(this._noise(v, 'white', t, dur + 0.05), this._flt(v, 'bandpass', 2300, 1.3), ch, this._g(v, 0.5), eg);
+  }
+
+  // A monophonic jingle instrument: oscillators (one per detune in cents; chords give each its own
+  // pitch) or a noise source -> filter -> envelope. Notes only automate it, so a whole tune costs
+  // a handful of nodes. `vib` = [Hz, cents].
+  _line(v, dest, t, end, { wave = 'sawtooth', det = [0], noise = null, type = 'lowpass', f = 4000, q = 0.7, vib = null } = {}) {
+    const fl = this._flt(v, type, f, q), g = this._g(v), os = [];
+    if (noise) this._noise(v, noise, t, end - t).connect(fl);
+    else for (const d of det) { const o = this._osc(v, wave, 440, t, end); o.detune.value = d; o.connect(fl); os.push(o); }
+    if (vib) {
+      const lg = this._g(v, vib[1]);
+      this._osc(v, 'sine', vib[0], t, end).connect(lg);
+      for (const o of os) lg.connect(o.detune);
+    }
+    link(fl, g, dest);
+    return { os, fl, g, f: 0 };
+  }
+
+  // One note on a line: `f` Hz (or one per oscillator) for `dn` s; the envelope ends inside the
+  // slot, so notes never click. `hold` is the sustained fraction; `fe` = filter [start, attack,
+  // end] x pitch; `scoop` bends up into the pitch (brass, twang); `glide` slides from the last
+  // note (whistle); `drop` sinks the pitch (drums).
+  _lineNote(L, tn, dn, f, { peak = 0.2, a = 0.005, hold = 0, fe = null, scoop = 0, glide: gl = 0, drop = 0 } = {}) {
+    const f0 = Array.isArray(f) ? f[0] : f;
+    L.os.forEach((x, i) => {
+      const fi = Array.isArray(f) ? f[i % f.length] : f, p = x.frequency;
+      if (gl && L.f) { p.setValueAtTime(L.f * (fi / f0), tn); p.exponentialRampToValueAtTime(fi, tn + gl); }
+      else if (scoop) { p.setValueAtTime(fi * scoop, tn); p.exponentialRampToValueAtTime(fi, tn + Math.min(0.06, dn * 0.3)); }
+      else if (drop) { p.setValueAtTime(fi, tn); p.exponentialRampToValueAtTime(fi * drop, tn + dn * 0.7); }
+      else p.setValueAtTime(fi, tn);
+    });
+    L.f = f0;
+    if (fe) {
+      const ff = L.fl.frequency, top = 16000;
+      ff.setValueAtTime(Math.min(f0 * fe[0], top), tn);
+      ff.exponentialRampToValueAtTime(Math.min(f0 * fe[1], top), tn + Math.min(a + 0.02, dn * 0.45));
+      ff.exponentialRampToValueAtTime(Math.min(f0 * fe[2], top), tn + dn * 0.9);
+    }
+    const h = Math.max(0, dn * hold - a), r = Math.max(0.02, dn * 0.92 - a - h);
+    ahr(L.g.gain, tn, a, h, r, peak);
+  }
+
+  // Ironclad Tonic: a brass band. Tuba on the beat, horn chords off it, the cornet tune with a
+  // little vibrato, bass drum and snare, rolls into bars 5 and 9, and a cymbal on the last hit.
+  _jIronclad(v, t) {
+    const B = 0.5, o = this._g(v, 0.62), end = t + 17 * B + 0.3;
+    o.connect(v.out);
+    const cor = this._line(v, o, t, end, { det: [-5, 6], q: 1.2, vib: [5.5, 7] });
+    const tuba = this._line(v, o, t, end, { det: [-4, 5], q: 0.9 });
+    const horn = this._line(v, o, t, end, { det: [-6, 2, 7], q: 1 });
+    const sn = this._line(v, o, t, end, { noise: 'white', type: 'bandpass', f: 1900, q: 0.8 });
+    const kick = this._line(v, o, t, end, { wave: 'sine', f: 300 });
+    for (const [b, len, n] of MARCH) this._lineNote(cor, t + b * B, len * B, semi(466.16, n), { peak: 0.15, a: 0.025, hold: 0.6, fe: [1.2, 6, 2.5], scoop: 0.97 });
+    MARCH_BARS.forEach(([b1, b2, ch], i) => {
+      const tb = t + i * 2 * B, chord = ch.map((n) => semi(233.08, n));
+      this._lineNote(tuba, tb, B, semi(116.54, b1), { peak: 0.3, a: 0.03, hold: 0.45, fe: [1.5, 5, 2] });
+      this._lineNote(tuba, tb + B, B, semi(116.54, b2), { peak: 0.26, a: 0.03, hold: 0.45, fe: [1.5, 5, 2] });
+      for (const k of [0.5, 1.5]) this._lineNote(horn, tb + k * B, 0.5 * B, chord, { peak: 0.06, a: 0.015, hold: 0.3, fe: [1.5, 5, 2.2] });
+      this._lineNote(kick, tb, 0.25, 92, { peak: 0.35, a: 0.002, drop: 0.45 });
+      if (i === 3 || i === 7) for (let k = 0; k < 8; k++) this._lineNote(sn, tb + B + (k * B) / 8, B / 8, 0, { peak: 0.08 + 0.03 * k, a: 0.001 });
+      else this._lineNote(sn, tb + B, 0.12, 0, { peak: 0.28, a: 0.001 });
+    });
+    const tf = t + 16 * B;
+    this._lineNote(tuba, tf, B, semi(116.54, -12), { peak: 0.38, a: 0.02, hold: 0.5, fe: [1.5, 6, 2] });
+    this._lineNote(horn, tf, B, [4, 7, 12].map((n) => semi(233.08, n)), { peak: 0.08, a: 0.012, hold: 0.5, fe: [1.5, 6, 2.2] });
+    this._lineNote(kick, tf, 0.3, 92, { peak: 0.45, a: 0.002, drop: 0.4 });
+    this._burst(v, o, tf, { type: 'highpass', f: 5500, a: 0.002, d: 1.3, peak: 0.1 });
+    this._burst(v, o, tf, { f: 3200, q: 0.6, a: 0.002, d: 0.5, peak: 0.08 });
+  }
+
+  // Lazarus Draught: celesta tune over a harp-like bass, music-box plinks on beats two and three,
+  // a soft breathing pad, and a rolled chord at the end.
+  _jLazarus(v, t) {
+    const B = 0.36, o = this._g(v, 2), end = t + 24 * B + 0.4;
+    o.connect(v.out);
+    const pad = this._line(v, o, t, end, { wave: 'triangle', det: [-5, 0, 6], f: 900 });
+    for (const [b, len, n] of LAZ) this._bell(v, o, t + b * B + rand(0, 0.012), semi(698.46, n), 1.1 + 0.25 * len, 0.12, CELESTA);
+    LAZ_BARS.forEach(([bass, plinks, chord], i) => {
+      const tb = t + i * 3 * B;
+      this._tone(v, o, tb, { wave: 'triangle', f: semi(174.61, bass), a: 0.005, d: 1.0, peak: 0.16 });
+      for (const k of [1, 2]) for (const n of plinks) this._bell(v, o, tb + k * B + rand(0, 0.01), semi(349.23, n), 0.5, 0.04, MUSICBOX);
+      this._lineNote(pad, tb, 3 * B, chord.map((n) => semi(174.61, n)), { peak: 0.025, a: 0.3, hold: 0.75 });
+    });
+    [0, 4, 7, 12].forEach((n, i) => this._bell(v, o, t + 21 * B + 0.07 * i, semi(349.23, n), 1.5, 0.05, CELESTA));
+    this._crackle(v, o, t + 21 * B, 1.5, { f: 8000, q: 1.2, count: 16, peak: 0.06, fade: 0.8 });
+  }
+
+  // Quicksilver Cola: a detuned honky-tonk upright. Syncopated right hand; stride left hand (bass
+  // on the beat, chord off it); a low octave and a full chord to finish.
+  _jQuicksilver(v, t) {
+    const B = 0.4, o = this._g(v, 1.7), end = t + 19 * B + 0.4;
+    o.connect(v.out);
+    const rh = this._line(v, o, t, end, { det: [-13, 12], q: 0.9 });
+    const lb = this._line(v, o, t, end, { det: [-9, 8], q: 0.8 });
+    const lc = this._line(v, o, t, end, { det: [-11, 3, 12], q: 0.8 });
+    for (const [b, len, n] of RAG) this._lineNote(rh, t + b * B, len * B, semi(523.25, n), { peak: 0.12, a: 0.003, fe: [9, 9, 2.2] });
+    RAG_BARS.forEach(([b1, b2, ch], i) => {
+      const tb = t + i * 2 * B, chord = ch.map((n) => semi(261.63, n));
+      this._lineNote(lb, tb, 0.5 * B, semi(130.81, b1), { peak: 0.3, a: 0.003, fe: [7, 7, 2] });
+      this._lineNote(lc, tb + 0.5 * B, 0.5 * B, chord, { peak: 0.07, a: 0.003, fe: [6, 6, 2] });
+      this._lineNote(lb, tb + B, 0.5 * B, semi(130.81, b2), { peak: 0.27, a: 0.003, fe: [7, 7, 2] });
+      this._lineNote(lc, tb + 1.5 * B, 0.5 * B, chord, { peak: 0.07, a: 0.003, fe: [6, 6, 2] });
+    });
+    const tf = t + 18 * B;
+    this._lineNote(lb, tf, B, semi(130.81, -12), { peak: 0.38, a: 0.003, fe: [8, 8, 2] });
+    this._lineNote(lc, tf, B, [4, 7, 12].map((n) => semi(261.63, n)), { peak: 0.09, a: 0.003, fe: [6, 6, 2] });
+  }
+
+  // Hair Trigger Stout: twangy guitar with a slapback echo, a plucked bass walking between the
+  // chords, backbeat chord chucks, a clip-clop wood block, a whistle joining for the last two
+  // bars, and a far-off shot ricocheting away to close.
+  _jHairtrigger(v, t) {
+    const B = 0.54, o = this._g(v, 0.95), end = t + 16 * B + 0.3;
+    o.connect(v.out);
+    const gtr = this._line(v, o, t, end, { det: [-6, 6], q: 1.4, vib: [6, 5] });
+    gtr.g.connect(this._echo(v, o, 0.12, 0.25, 2400, 0.35));
+    const wh = this._line(v, o, t, end, { wave: 'sine', f: 8000, vib: [5.6, 16] });
+    const bass = this._line(v, o, t, end, { wave: 'triangle', det: [-3, 4], f: 900 });
+    const chuck = this._line(v, o, t, end, { det: [-7, 0, 6], f: 1200 });
+    const chk = this._line(v, o, t, end, { noise: 'white', type: 'bandpass', f: 2600, q: 1 });
+    const blk = this._line(v, o, t, end, { wave: 'sine', f: 5000 });
+    for (const [b, len, n] of WEST) {
+      this._lineNote(gtr, t + b * B, len * B, semi(329.63, n), { peak: 0.12, a: 0.004, hold: 0.25, fe: [12, 12, 3], scoop: 0.94 });
+      if (b >= 8) this._lineNote(wh, t + b * B, len * B, semi(659.25, n), { peak: 0.06, a: 0.05, hold: 0.75, glide: 0.05 });
+    }
+    WEST_BARS.forEach(([notes, ch], i) => {
+      const tb = t + i * 4 * B, chord = ch.map((n) => semi(164.81, n)), last = i === 3;
+      for (const [b, len, n] of notes) this._lineNote(bass, tb + b * B, len * B, semi(82.41, n), { peak: 0.22, a: 0.004, hold: 0.2, fe: [8, 8, 2] });
+      for (const k of last ? [1] : [1, 3]) {
+        this._lineNote(chuck, tb + k * B, 0.35 * B, chord, { peak: 0.05, a: 0.004, fe: [6, 6, 1.5] });
+        this._lineNote(chk, tb + k * B, 0.1, 0, { peak: 0.12, a: 0.002 });
+      }
+      for (let b = 0; b < (last ? 1 : 4); b++) {
+        this._lineNote(blk, tb + b * B, 0.07, 1250, { peak: 0.14, a: 0.001 });
+        this._lineNote(blk, tb + (b + 0.67) * B, 0.07, 880, { peak: 0.12, a: 0.001 });
+      }
+    });
+    const tr = t + 15.6 * B;
+    this._burst(v, o, tr, { type: 'highpass', f: 3000, d: 0.015, peak: 0.4 });
+    this._burst(v, o, tr, { f: 1400, q: 0.8, d: 0.06, peak: 0.3 });
+    const ric = this._tone(v, o, tr + 0.02, { f: 3600, f2: 1100, sw: 0.55, a: 0.004, d: 0.6, peak: 0.07 });
+    link(this._osc(v, 'sine', 30, tr, tr + 0.7), this._g(v, 35), ric.detune);
+  }
 }
 
 // Fallback results so handle-returning methods stay safe to use even if synthesis throws.
-const FALLBACK = { __proto__: null, radioSong: NOOP_HANDLE, bossMusic: NOOP_HANDLE, houndGrowl: NOOP_TRACK, houndBark: NOOP_TRACK, figurineChime: NOOP_TRACK };
+const FALLBACK = {
+  __proto__: null, radioSong: NOOP_HANDLE, bossMusic: NOOP_HANDLE, houndGrowl: NOOP_TRACK, houndBark: NOOP_TRACK, figurineChime: NOOP_TRACK,
+  perkJingle: NOOP_HANDLE, trap: NOOP_HANDLE, stun: NOOP_TRACK, crawl: NOOP_TRACK,
+};
 
 // Public methods never throw: runtime errors are swallowed (reported to opts.onError if given).
 for (const name of Object.getOwnPropertyNames(AudioEngine.prototype)) {

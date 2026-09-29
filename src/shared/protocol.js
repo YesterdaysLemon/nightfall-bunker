@@ -1,6 +1,6 @@
 // Wire constants shared by clients, the browser-local sim and both servers.
 
-export const PROTOCOL = 3;
+export const PROTOCOL = 4;
 export const MAX_PLAYERS = 4;
 
 // Enemy states. WARP: a hound materialising; SHATTER/REFORM: the porcelain boss
@@ -8,8 +8,12 @@ export const MAX_PLAYERS = 4;
 export const ZS = { RISE: 0, WINDOW_WALK: 1, TEAR: 2, CLIMB: 3, CHASE: 4, ATTACK: 5, WARP: 6, SHATTER: 7, REFORM: 8 };
 // Enemy classes (the snapshot's `cls` column).
 export const ZC = { WALKER: 0, JOGGER: 1, RUNNER: 2, HOUND: 3, KINTSUGI: 4 };
+// Enemy condition bits (the snapshot's optional 8th column): CRAWL lost its legs to a
+// blast and drags itself along; STUN slowed by an Arc Pistol blast.
+export const ZF = { CRAWL: 1, STUN: 2 };
 // How an enemy died (the kill event's kind); the client picks the death from it.
-export const KILL = { BODY: 0, HEAD: 1, BLAST: 2, NUKE: 3, SHOCK: 4 };
+// GUST: flung by the Gale Cannon's blast of air.
+export const KILL = { BODY: 0, HEAD: 1, BLAST: 2, NUKE: 3, SHOCK: 4, GUST: 5 };
 // Player states.
 export const PS = { ALIVE: 0, DOWN: 1, DEAD: 2 };
 

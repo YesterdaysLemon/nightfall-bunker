@@ -53,6 +53,9 @@ test('edge: regions, beacons, party, region choice and match handoff', { skip: !
   await b.send({ t: 'hello', v: PROTOCOL, token: 'edgeBBBBBBBB', name: 'Bob', pings: { weur: 110, enam: 25, wnam: 70 } });
   const lobby = await a.wait((m) => m.t === 'lobby' && m.members.length === 2, 'lobby with two');
   assert.equal(lobby.region, 'enam', 'minimises the worst ping');
+  // The host picks the map; the match object remembers it.
+  await a.send({ t: 'map', id: 'palace' });
+  await b.wait((m) => m.t === 'lobby' && m.map === 'palace', 'map picked');
   await a.send({ t: 'start' });
   const go = await b.wait((m) => m.t === 'go', 'go');
   assert.equal(go.region, 'enam');
@@ -63,6 +66,7 @@ test('edge: regions, beacons, party, region choice and match handoff', { skip: !
   await mb.send({ t: 'hello', v: PROTOCOL, token: 'edgeBBBBBBBB', name: 'Bob' });
   const w = await ma.wait((m) => m.t === 'welcome', 'welcome');
   assert.equal(w.region, 'enam');
+  assert.equal(w.map, 'palace', 'the match plays the lobby map');
   await mb.wait((m) => m.t === 's' && m.p.length === 2, 'snapshot with two players');
 
   // A late joiner using the lobby code is redirected into the running match.

@@ -2,7 +2,7 @@
 // in the courtyard) and the porcelain figurine on the help-room cabinet.
 
 import * as THREE from 'three';
-import { EGG } from '../../shared/map.js';
+import { EGG } from '../../shared/map.js';   // the bunker's egg (only the bunker has one)
 import { raySphere } from '../../shared/world.js';
 import { buildFigurine, buildTeacup } from './kintsugi.js';
 
@@ -37,6 +37,11 @@ export class EggProps {
     this.stage = 'cups';
     this.glow = 0;
     this.time = 0;
+  }
+
+  // Leaving the bunker for another map.
+  dispose() {
+    this.group.parent?.remove(this.group);
   }
 
   // The painted cups and figurine, once the Kintsugi model arrives (it loads after

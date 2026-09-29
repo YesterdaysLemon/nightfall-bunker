@@ -3,16 +3,18 @@
 
 import * as THREE from 'three';
 import { World, enemyHitTest } from '../shared/world.js';
-import { enemy } from '../shared/enemies.js';
+import { enemy, enemyFor } from '../shared/enemies.js';
 import { lookOf } from './enemy-looks.js';
 import { powerupName } from '../shared/powerups.js';
-import { CORE_EVENTS, HOUND_EVENTS, KINTSUGI_EVENTS, eventTable } from './events.js';
+import { CORE_EVENTS, HOUND_EVENTS, KINTSUGI_EVENTS, MACHINE_EVENTS, eventTable } from './events.js';
 import { TEXT, SOUND_CAPTIONS } from './text.js';
+import { DEFAULT_MAP, mapById } from '../shared/map.js';
 import {
-  WINDOWS, DOORS, WALL_BUYS, MYSTERY_BOX, RADIO, LOFT_Y, MAX_BOARDS, PLAYER_SPAWNS, EGG, openZones,
-} from '../shared/map.js';
-import { WEAPONS, WALL_PRICES, BOX_COST, BOX_POOL, START_WEAPON, KNIFE, GRENADE, shotInterval, reloadStyle } from '../shared/weapons.js';
-import { PS, ZS, ZC, IN, PROTOCOL, REGIONS } from '../shared/protocol.js';
+  WEAPONS, WALL_PRICES, BOX_COST, BOX_POOL, START_WEAPON, KNIFE, GRENADE, FORGE_COST, shotInterval, reloadStyle, upgradedId,
+} from '../shared/weapons.js';
+import { PERKS, PERK_IDS, perkMult, perkCost } from '../shared/perks.js';
+import { UPGRADED_AMMO } from '../shared/sim.js';
+import { PS, ZS, ZC, IN, PROTOCOL, REGIONS, ZF } from '../shared/protocol.js';
 import { ACTIONS, bindingsOf, keyLabel } from './settings.js';
 import { EggProps } from './render/egg.js';
 import { prepareRetroTextures, setRetroTextures } from './render/retro.js';
@@ -20,7 +22,9 @@ import { buildTeacup } from './render/kintsugi.js';
 import { SceneRig } from './render/scene.js';
 import { createTextures } from './render/textures.js';
 import { Level } from './render/level.js';
-import { Exterior } from './render/exterior.js';
+import { DRESSING } from './render/maps/index.js';
+import { MachineProps } from './render/machine-props.js';
+import { buildBoxToken } from './render/machines.js';
 import { Zombies } from './render/zombies.js';
 import { Avatars } from './render/avatars.js';
 import { FX } from './render/fx.js';
@@ -54,17 +58,17 @@ export class Game {
     this.muted = !!settings.muted;
     this.audio = new AudioEngine({ masterVolume: this.muted ? 0 : settings.volume, hrtf: settings.hrtf !== false });
     this.audio.occlusion = (x, y, z) => this.occlusionAt(x, y, z);
-    this.level = new Level(this.rig, this.tex);
-    this.exterior = new Exterior(this.rig, this.level.mats, this.tex);
-    this.world = new World();
+    this.map = mapById(settings.map || DEFAULT_MAP);
+    this.world = new World(this.map);
     this.fx = new FX(this.rig, this.tex, this.world, this.audio);
     this.zombies = new Zombies(this.rig, this.tex, this.audio, this.fx, models);
     this.zombies.onSpawn = (z) => this.onZombieSpawn(z);
-    this.eventHandlers = eventTable(CORE_EVENTS, HOUND_EVENTS, KINTSUGI_EVENTS);
+    this.eventHandlers = eventTable(CORE_EVENTS, HOUND_EVENTS, KINTSUGI_EVENTS, MACHINE_EVENTS);
     this.zombies.onSound = (kind, z) => {
       if (Math.hypot(z.x - this.p.x, z.z - this.p.z) < 14) this.caption(kind, SOUND_CAPTIONS[kind], z.x, z.z);
     };
-    this.egg = new EggProps(this.rig, this.tex, models.kintsugi);
+    this.egg = null;
+    this.setMap(this.map.id);
     this.fx.goldModel = () => { const g = buildTeacup(this.models.kintsugi); g.scale.setScalar(3.4); g.position.y = -0.15; return g; };
     this.avatars = new Avatars(this.rig.scene, this.tex, models.survivor || null);
     this.vm = new ViewModel();
@@ -127,31 +131,68 @@ export class Game {
   useModels(models) {
     Object.assign(this.models, models);
     this.zombies.useModels(models);
-    this.egg.setModel(models.kintsugi);
+    this.egg?.setModel(models.kintsugi);
     this.avatars.useModel(models.survivor);
     this.standIns(true);
     this.compileFor([[this.rig.scene, this.rig.camera]]).catch(() => {});
     this.standIns(false);
   }
 
+  // Build the world for a map (its level, dressing, machines and lamps), replacing
+  // the last one. Everything else (enemies, guns, effects) is shared by every map.
+  setMap(id) {
+    const map = mapById(id);
+    if (this.level && this.map === map) return;
+    this.level?.dispose();
+    this.machines?.dispose();
+    this.egg?.dispose?.();
+    this.map = map;
+    this.rig.setLights(map.LIGHTS, !map.POWER);
+    this.rig.setFog(map.fog);
+    this.level = new Level(this.rig, this.tex, map, DRESSING[map.id] || DRESSING.bunker);
+    this.level.makeToken = () => buildBoxToken();
+    this.machines = new MachineProps(this.rig, map);
+    const culler = this.level.palace?.culler;
+    if (culler) this.machines.sees = (x, y, z, r) => culler.enabled === false || culler.sees(x, y, z, r);
+    this.zombies.mapId = map.id;
+    this.machines.setCalm(!!this.settings.reduceFlashing);
+    this.egg = map.EGG ? new EggProps(this.rig, this.tex, this.models.kintsugi) : null;
+    this.world = new World(map);
+    if (this.fx) {
+      this.fx.world = this.world;
+      this.fx.fireAt = map.LIGHTS.filter((l) => l.fire).map((l) => new THREE.Vector3(...l.pos));
+    }
+    this.boards = map.WINDOWS.map(() => map.MAX_BOARDS);
+    this.ready?.then(() => this.compileFor([[this.rig.scene, this.rig.camera]]).catch(() => {}));
+  }
+
   resetState() {
     this.me = null;
     this.players = new Map();  // id -> {name, slot, points, state, row}
-    const sp = PLAYER_SPAWNS[0];
+    const sp = this.map.PLAYER_SPAWNS[0];
     this.p = {
       x: sp[0], y: 0, z: sp[2], vx: 0, vy: 0, vz: 0, onGround: true, height: 1.75,
       yaw: sp[3], pitch: 0, eye: EYE, eyeSmooth: 0, crouch: 0,
       hp: 100, state: PS.ALIVE, points: 500, grenades: GRENADE.start,
       weapons: [START_WEAPON], cur: START_WEAPON, ammo: {},
       fireT: 0, reloadT: 0, reloadDur: 0, reloadEvents: [], switchT: 0, knifeT: 0, nadeT: 0, nadePending: 0,
-      bloom: 0, stamina: 3, sprinting: false, lastStep: 0, recoilPitch: 0,
+      bloom: 0, stamina: 3, sprinting: false, lastStep: 0, recoilPitch: 0, perks: [],
     };
+    this.power = !this.map.POWER;
+    this.forge = { state: 'idle', owner: null, weapon: null };
+    this.pads = (this.map.TELEPORT?.pads || []).map(() => 'ready');
+    this.traps = (this.map.TRAPS || []).map(() => 'ready');
+    for (const h of this.trapSounds || []) h?.stop?.();
+    this.trapSounds = [];
+    this.perkUses = {};
+    this.jingleT = 12;
+    this.hud?.perks([]);
     this.giveAmmo(START_WEAPON);
     this.round = 0;
     this.phase = 'pre';
     this.boxState = { state: 'idle', owner: null, weapon: null };
     this.openDoors = new Set();
-    this.boards = WINDOWS.map(() => MAX_BOARDS);
+    this.boards = this.map.WINDOWS.map(() => this.map.MAX_BOARDS);
     this.inputT = 0;
     this.lastSnapK = 0;
     this.clockOffset = null;
@@ -163,7 +204,7 @@ export class Game {
     this.target = null;
     this.over = null;
     this.snapRows = [];
-    this.eggStage = 'cups';
+    this.eggStage = this.map.EGG ? 'cups' : 'none';   // only the bunker has the teacups
     this.bossId = null;
     this.bossMusic?.stop?.();
     this.bossMusic = null;
@@ -209,6 +250,7 @@ export class Game {
     // Accessibility: calmer flashes, less camera and weapon motion.
     this.rig.calm = !!s.reduceFlashing;
     this.zombies.setCalm(!!s.reduceFlashing);
+    this.machines?.setCalm(!!s.reduceFlashing);
     this.vm.motion = s.reduceMotion ? 0.2 : 1;
     this.input.setBindings(bindingsOf(s), Object.fromEntries(ACTIONS.map((a) => [a.id, a.keys])));
     this.input.setToggles({ aim: !!s.toggleAim, sprint: !!s.toggleSprint, crouch: !!s.toggleCrouch });
@@ -227,10 +269,11 @@ export class Game {
   }
 
   // --- Session lifecycle ---------------------------------------------------------------
-  start(conn, { name, token, local }) {
+  start(conn, { name, token, local, map }) {
     this.stop();
+    if (map) this.setMap(map);
     this.resetState();
-    this.world = new World();
+    this.world = new World(this.map);
     this.fx.world = this.world;
     this.conn = conn;
     this.local = !!local;
@@ -240,16 +283,21 @@ export class Game {
     conn.onclose = () => { if (this.mode === 'play') this.onEvent({ type: 'disconnected' }); };
     conn.send({ t: 'hello', v: PROTOCOL, token, name });
     this.hud.reset();
-    this.level.resetBoards(this.boards);
-    this.rebuildDoorVisuals();
-    this.level.setBox('idle');
-    this.egg.reset(null);
+    this.freshWorld();
   }
 
-  rebuildDoorVisuals() {
-    // Door pieces animate away; recreate them fresh for a new session.
-    for (const v of this.level.doorVis.values()) this.level.group.remove(v.group);
-    this.level.buildDoors();
+  // A new session's world: boards up, doors shut, the box home, machines dark.
+  freshWorld() {
+    this.level.resetBoards(this.boards);
+    this.level.rebuildDoors();
+    this.level.setBox('idle');
+    this.level.setBoxSpot(0, true);
+    this.egg?.reset(null);
+    this.rig.setPower(this.power);
+    this.machines.setPower(this.power, true);
+    this.machines.setForge('idle');
+    this.pads.forEach((st, i) => this.machines.setPad(i, st));
+    this.traps.forEach((st, i) => this.machines.setTrap(i, st));
   }
 
   // Leave the match completely: nothing of it (sounds, timers, enemies, effects)
@@ -291,6 +339,16 @@ export class Game {
   }
 
   onWelcome(m) {
+    // A lobby's match may be on another map than the one showing.
+    if (m.map && m.map !== this.map.id) {
+      this.setMap(m.map);
+      this.boards = this.map.WINDOWS.map(() => this.map.MAX_BOARDS);
+      this.power = !this.map.POWER;
+      this.pads = (this.map.TELEPORT?.pads || []).map(() => 'ready');
+      this.traps = (this.map.TRAPS || []).map(() => 'ready');
+      this.eggStage = this.map.EGG ? 'cups' : 'none';
+      this.freshWorld();
+    }
     this.me = m.id;
     this.region = m.region;
     this.matchId = m.match;
@@ -298,9 +356,18 @@ export class Game {
     for (const id of m.doors) this.doorOpened(id, true);
     this.boards = m.boards;
     this.level.resetBoards(m.boards);
-    if (m.box) { this.boxState = m.box; if (m.box.state !== 'idle') this.level.setBox(m.box.state, m.box.weapon, m.box.owner, Object.keys(BOX_POOL)); }
+    if (m.box) {
+      this.boxState = m.box;
+      this.level.setBoxSpot(m.box.spot || 0, true);
+      if (m.box.state !== 'idle') this.level.setBox(m.box.state, m.box.weapon, m.box.owner, this.boxPool());
+    }
+    if (m.power !== undefined) { this.power = m.power; this.rig.setPower(m.power); this.machines.setPower(m.power, true); }
+    if (m.forge) { this.forge = m.forge; this.machines.setForge(m.forge.state, m.forge.weapon); }
+    if (m.tele) m.tele.pads.forEach((st, i) => { this.pads[i] = st; this.machines.setPad(i, st); });
+    if (m.traps) m.traps.forEach((st, i) => this.onTrap(i, st, true));
+    if (m.perkUses) this.perkUses = m.perkUses;
     for (const [id, type, x, y, z] of m.powerups) this.fx.spawnPowerup(id, type, x / 100, y / 100, z / 100);
-    if (m.egg) { this.eggStage = m.egg.stage; this.egg.reset(m.egg); }
+    if (m.egg && this.egg) { this.eggStage = m.egg.stage; this.egg.reset(m.egg); }
     this.rig.setDread(!!m.hounds);
     const me = m.me;
     if (me) {
@@ -315,7 +382,7 @@ export class Game {
     this.mode = 'play';
     this.input.enabled = true;
     this.hud.show(true);
-    this.audio.startAmbience();
+    this.audio.startAmbience(this.map.id);
     this.onEvent({ type: 'started' });
   }
 
@@ -348,6 +415,8 @@ export class Game {
         this.p.points = r[9];
         if (r[7] !== this.p.state) this.setMyState(r[7]);
         this.p.grenades = r[18];
+        const perks = PERK_IDS.filter((id, i) => (r[19] | 0) & (1 << i));
+        if (perks.join() !== this.p.perks.join()) { this.p.perks = perks; this.hud.perks(perks); }
         this.myRevive = r[11];
         this.myBleed = r[12];
       } else {
@@ -400,7 +469,7 @@ export class Game {
   // --- Event handlers ------------------------------------------------------------------------
   onZombieSpawn(z) {
     if (z.state !== ZS.RISE) return;
-    const ground = Math.max(0, z.y + 1.7) > 2 ? LOFT_Y : 0;
+    const ground = Math.max(0, Math.round((z.y + 1.7) * 10) / 10);   // it rises out of this floor
     this.fx.dirt(z.x, ground, z.z);
     this.audio.zombieSpawn({ x: z.x, y: ground, z: z.z });
   }
@@ -411,7 +480,7 @@ export class Game {
     const cls = z ? z.cls : ZC.WALKER;
     lookOf(cls).kill(this, {
       x: x100 / 100, y: y100 / 100, z: z100 / 100, kind, dx: Math.sin(ang / 100), dz: Math.cos(ang / 100),
-      mine: by === this.me, seed: z ? z.seed : zid,
+      mine: by === this.me, seed: z ? z.seed : zid, low: !!(z && z.flags & ZF.CRAWL),
     });
     if (enemy(cls).boss) this.onBossKilled();
   }
@@ -436,7 +505,7 @@ export class Game {
   }
 
   onBoard(id, count, repaired) {
-    const w = WINDOWS[id];
+    const w = this.map.WINDOWS[id];
     this.boards[id] = count;
     this.level.setBoards(id, count);
     const pos = { x: w.x, y: w.sill + 0.6, z: w.z };
@@ -452,21 +521,57 @@ export class Game {
     }
   }
 
+  boxPool() { return Object.keys(this.map.BOX_POOL || BOX_POOL); }
+
   onBox(e) {
     const kind = e[1];
+    const B = this.level.boxSpotPos();
+    const pos = { x: B[0], y: B[1] + 0.5, z: B[2] };
     if (kind === 'open') {
       this.boxState = { state: 'rolling', owner: e[2], weapon: e[3] };
-      this.level.setBox('rolling', e[3], e[2], Object.keys(BOX_POOL));
-      const pos = { x: MYSTERY_BOX.pos[0], y: MYSTERY_BOX.pos[1] + 0.5, z: MYSTERY_BOX.pos[2] };
+      this.level.setBox('rolling', e[3], e[2], this.boxPool());
       this.audio.boxOpen(pos);
       this.audio.boxJingle(pos, 4.2);
     } else if (kind === 'ready') {
       this.boxState = { state: 'ready', owner: e[2], weapon: e[3] };
       this.level.setBox('ready', e[3], e[2]);
-      this.audio.boxLand({ x: MYSTERY_BOX.pos[0], y: MYSTERY_BOX.pos[1] + 0.8, z: MYSTERY_BOX.pos[2] });
+      this.audio.boxReady({ ...pos, y: pos.y + 0.3 });
+    } else if (kind === 'leave') {
+      // A toy instead of a gun: the box is about to move.
+      this.boxState = { state: 'leaving', owner: e[2], weapon: null };
+      this.level.setBox('leaving', null, e[2], this.boxPool());
+      this.audio.boxOpen(pos);
+      this.audio.boxJingle(pos, 3.2);
+      setTimeout(() => { if (this.boxState.state === 'leaving') this.audio.boxLeave(pos); }, 3200);
+    } else if (kind === 'fly') {
+      this.boxState = { state: 'moving', owner: null, weapon: null };
+      this.level.setBox('moving');
+      this.caption('box', SOUND_CAPTIONS.boxFly, pos.x, pos.z);
+      if (e[2] === undefined && this.boxState) this.hud.center(TEXT.boxMoved, '', 2200);
+    } else if (kind === 'move') {
+      this.boxState = { state: 'idle', owner: null, weapon: null };
+      this.level.setBoxSpot(e[2]);
+      this.level.setBox('idle');
+      const N = this.level.boxSpotPos();
+      setTimeout(() => this.audio.boxLand({ x: N[0], y: N[1] + 0.3, z: N[2] }), 500);
     } else {
       this.boxState = { state: 'idle', owner: null, weapon: null };
       this.level.setBox('idle');
+    }
+  }
+
+  // A Spark Gate changes: its switch lamps, its arcs and their buzz.
+  onTrap(i, state, quiet = false) {
+    this.traps[i] = state;
+    this.machines.setTrap(i, state);
+    const T = this.map.TRAPS?.[i];
+    if (!T) return;
+    if (state === 'active' && !this.trapSounds[i] && !quiet) {
+      const [a, b] = [T.gate.a, T.gate.b];
+      this.trapSounds[i] = this.audio.trap({ x: (a[0] + b[0]) / 2, y: a[1] + 1.2, z: (a[2] + b[2]) / 2 });
+    } else if (state !== 'active' && this.trapSounds[i]) {
+      this.trapSounds[i].stop();
+      this.trapSounds[i] = null;
     }
   }
 
@@ -539,7 +644,7 @@ export class Game {
     this.world.setDoorOpen(id);
     this.level.openDoor(id, instant);
     if (!instant) {
-      const d = DOORS.find((q) => q.id === id);
+      const d = this.map.DOORS.find((q) => q.id === id);
       const b = d.box;
       this.fx.dust((b[0] + b[3]) / 2, b[1], (b[2] + b[5]) / 2, b[3] - b[0] + 0.5, b[5] - b[2] + 0.5);
       this.audio.doorOpen({ x: (b[0] + b[3]) / 2, y: 1, z: (b[2] + b[5]) / 2 });
@@ -554,7 +659,8 @@ export class Game {
     const d = _dir.set(dx / 1000, dy / 1000, dz / 1000).normalize();
     const muzzle = this.avatars.muzzlePos(pid, _v2) || o;
     this.fx.muzzleWorld(muzzle.x, muzzle.y, muzzle.z);
-    this.audio.gunshot(W.sound, { x: muzzle.x, y: muzzle.y, z: muzzle.z });
+    this.audio.gunshot(W.sound, { x: muzzle.x, y: muzzle.y, z: muzzle.z }, !!W.upgradeOf);
+    if (W.cone) { this.fx.gust?.(muzzle, d, W.cone.reach, W.cone.angle); return; }
     if (W.projectile || W.chain) return;   // their own events draw them ('proj', 'chain')
     const n = [0, 0, 0];
     for (let i = 0; i < Math.min(W.pellets, 4); i++) {
@@ -599,7 +705,7 @@ export class Game {
     const W = WEAPONS[p.cur];
     const a = p.ammo[p.cur];
     if (!a || p.reloadT > 0 || a.mag >= W.mag || a.res <= 0 || p.switchT > 0) return;
-    const dur = W.reload;
+    const dur = W.reload * perkMult(p.perks, 'reloadMult');
     p.reloadT = dur;
     p.reloadDur = dur;
     const style = reloadStyle(W);
@@ -659,7 +765,7 @@ export class Game {
     const auto = I.touchMode && this.settings.touchAutoFire !== false && this.crosshairOnZombie(W);
     const trigger = (W.auto ? I.mouse.left : I.hit('Mouse0')) || auto;
     if (!trigger) return;
-    if (p.switchT > 0 || p.reloadT > 0 || p.fireT > 0 || p.knifeT > 0.3 || p.nadePending > 0) return;
+    if (p.switchT > 0 || p.reloadT > 0 || p.fireT > 0 || p.knifeT > 0.3 || p.nadePending > 0 || this.vm.drinking) return;
     if (p.sprinting) { p.sprinting = false; }
     if (a.mag <= 0) {
       if (I.hit('Mouse0')) this.audio.dryFire();
@@ -667,7 +773,7 @@ export class Game {
       return;
     }
     a.mag--;
-    p.fireT = shotInterval(p.cur);
+    p.fireT = shotInterval(p.cur) / perkMult(p.perks, 'rateMult');
     this.fire(W);
   }
 
@@ -684,8 +790,9 @@ export class Game {
     cam.getWorldDirection(_dir);
     const muzzle = this.vm.muzzleWorld(cam, _v2);
     this.vm.fire(p.cur, p.ammo[p.cur]?.mag ?? 1);
-    this.audio.gunshot(W.sound);
-    if (W.kind === 'wonder') this.rig.muzzleFlash(muzzle, W.chain ? 1.6 : 0.4, 0x8fd8ff, W.chain ? 0.1 : 0.05);
+    this.audio.gunshot(W.sound, null, !!W.upgradeOf);
+    if (W.cone) this.rig.muzzleFlash(muzzle, 0.5, 0xdfe8ff, 0.06);
+    else if (W.kind === 'wonder') this.rig.muzzleFlash(muzzle, W.chain ? 1.6 : 0.4, 0x8fd8ff, W.chain ? 0.1 : 0.05);
     else this.rig.muzzleFlash(muzzle, 1);
     p.recoilPitch += W.kick * (1 - ads * 0.5) * 0.9;
     if (W.projectile) {
@@ -693,6 +800,7 @@ export class Game {
       return;
     }
     if (W.chain) return this.fireChain(W, o, _dir, muzzle);
+    if (W.cone) return this.fireCone(W, o, _dir, muzzle);
     const hits = [];
     const n = [0, 0, 0];
     const right = _v.set(1, 0, 0).applyQuaternion(cam.quaternion);
@@ -706,14 +814,14 @@ export class Game {
       const ux = dx / len, uy = dy / len, uz = dz / len;
       const wallT = this.world.raycast(o.x, o.y, o.z, ux, uy, uz, W.range, n);
       const zh = [];
-      this.zombies.forEachTarget((id, zx, zy, zz, st, cls, yaw) => {
+      this.zombies.forEachTarget((id, zx, zy, zz, st, cls, yaw, fl) => {
         if (Math.abs(zx - o.x) > W.range || Math.abs(zz - o.z) > W.range) return;
-        const h = enemyHitTest(cls, o.x, o.y, o.z, ux, uy, uz, zx, zy, zz, yaw, wallT);
+        const h = enemyHitTest(cls, o.x, o.y, o.z, ux, uy, uz, zx, zy, zz, yaw, wallT, fl);
         if (h) zh.push([h.t, id, h.part]);
       });
       zh.sort((q, r2) => q[0] - r2[0]);
       // A teacup in the line of fire (only the first pellet can claim one).
-      if (k === 0 && this.eggStage === 'cups') {
+      if (k === 0 && this.egg && this.eggStage === 'cups') {
         const cup = this.egg.hitTest(o.x, o.y, o.z, ux, uy, uz, Math.min(wallT, zh.length ? zh[0][0] : Infinity));
         if (cup >= 0) this.conn.send({ t: 'cup', i: cup, o: [o.x, o.y, o.z], d: [ux, uy, uz] });
       }
@@ -741,12 +849,12 @@ export class Game {
   fireChain(W, o, d, muzzle) {
     const wallT = this.world.raycast(o.x, o.y, o.z, d.x, d.y, d.z, W.range);
     let best = null, bs = Infinity;
-    this.zombies.forEachTarget((id, zx, zy, zz, st, cls, yaw) => {
-      const my = zy + enemy(cls).mid;
+    this.zombies.forEachTarget((id, zx, zy, zz, st, cls, yaw, fl) => {
+      const my = zy + enemyFor(cls, fl).mid;
       const vx = zx - o.x, vy = my - o.y, vz = zz - o.z;
       const t = vx * d.x + vy * d.y + vz * d.z;
       if (t < 0.3 || t > W.range) return;
-      const direct = enemyHitTest(cls, o.x, o.y, o.z, d.x, d.y, d.z, zx, zy, zz, yaw, wallT);
+      const direct = enemyHitTest(cls, o.x, o.y, o.z, d.x, d.y, d.z, zx, zy, zz, yaw, wallT, fl);
       const off = direct ? 0 : Math.hypot(vx - d.x * t, vy - d.y * t, vz - d.z * t);
       if (off > W.chain.aim + t * 0.02) return;
       const score = off + t * 0.01;   // direct hits first, then whoever is nearest the line
@@ -754,7 +862,7 @@ export class Game {
       bs = score;
       best = [id, zx, my, zz];
     });
-    if (this.eggStage === 'cups') {
+    if (this.egg && this.eggStage === 'cups') {
       const cup = this.egg.hitTest(o.x, o.y, o.z, d.x, d.y, d.z, wallT);
       if (cup >= 0) this.conn.send({ t: 'cup', i: cup, o: [o.x, o.y, o.z], d: [d.x, d.y, d.z] });
     }
@@ -763,6 +871,13 @@ export class Game {
     this.chainClaim = best ? best[0] : 0;
     this.fx.chain(2, (i) => (i ? to : from), 0, (i, b) => this.audio.zap({ x: b[0], y: b[1], z: b[2] }, 0));
     this.conn.send({ t: 'fire', w: this.p.cur, o: [o.x, o.y, o.z], d: [d.x, d.y, d.z], h: best ? [[best[0], 1]] : [] });
+  }
+
+  // A blast of air: the server decides who it flings; the shooter sees the gust at once.
+  fireCone(W, o, d, muzzle) {
+    this.fx.gust?.(muzzle, d, W.cone.reach, W.cone.angle);
+    this.shake = Math.max(this.shake, 0.35);
+    this.conn.send({ t: 'fire', w: this.p.cur, o: [o.x, o.y, o.z], d: [d.x, d.y, d.z], h: [] });
   }
 
   // The server's chain-lightning path: bolts fork enemy to enemy, `delay` apart,
@@ -779,7 +894,7 @@ export class Game {
     if (m) P[0] = [m.x, m.y, m.z];
     const at = (i) => {
       const z = i > 0 ? this.zombies.get(ids[i - 1]) : null;
-      return z ? [z.x, z.y + enemy(z.cls).mid, z.z] : P[i];
+      return z ? [z.x, z.y + enemyFor(z.cls, z.flags).mid, z.z] : P[i];
     };
     const skip = mine && (!ids.length || ids[0] === this.chainClaim) ? 1 : 0;
     this.fx.chain(P.length, at, C.delay, (i, b) => this.audio.zap({ x: b[0], y: b[1], z: b[2] }, i), skip, Array.isArray(from) ? from : null);
@@ -795,16 +910,16 @@ export class Game {
     const cam = this.rig.camera;
     cam.getWorldDirection(_dir);
     let best = null, bd = KNIFE.range + 0.3;
-    this.zombies.forEachTarget((id, zx, zy, zz, st, cls) => {
+    this.zombies.forEachTarget((id, zx, zy, zz, st, cls, yaw, fl) => {
       const dx = zx - p.x, dz = zz - p.z;
       const d = Math.hypot(dx, dz);
       if (d > bd || Math.abs(zy - p.y) > 1.3 || st === ZS.RISE) return;
       const dot = (dx * _dir.x + dz * _dir.z) / (d * Math.hypot(_dir.x, _dir.z) || 1);
       if (dot < 0.55 && d > 0.6) return;
-      best = { id, zx, zy, zz, cls }; bd = d;
+      best = { id, zx, zy, zz, cls, fl }; bd = d;
     });
     if (best) {
-      const fy = best.zy + enemy(best.cls).fxY;
+      const fy = best.zy + enemyFor(best.cls, best.fl).fxY;
       this.fx.blood(best.zx, fy, best.zz, _dir.x, 0.2, _dir.z, 1.2);
       this.audio.knifeHit({ x: best.zx, y: fy, z: best.zz });
       // Lunge a little toward the target.
@@ -832,42 +947,106 @@ export class Game {
       if (pl.id === this.me || pl.state !== PS.DOWN) continue;
       if (near(pl.x, pl.y, pl.z, 1.6)) return { kind: 'revive', hold: true, label: TEXT.revive(this.keyName('use'), escapeHtml(pl.name)), short: `Revive ${pl.name}`, pl };
     }
-    const B = MYSTERY_BOX;
-    if (openZones(this.openDoors).has(B.zone)) {   // the same rule as the server's
-      if (near(B.pos[0], B.pos[1], B.pos[2], 2.1)) {
-        const bs = this.boxState;
-        if (bs.state === 'ready' && bs.owner === this.me) return { kind: 'boxTake', label: TEXT.boxTake(this.keyName('use'), WEAPONS[bs.weapon].name), short: `Take ${WEAPONS[bs.weapon].name}` };
-        if (bs.state === 'idle') return { kind: 'box', label: TEXT.box(this.keyName('use'), BOX_COST), short: `Mystery box · ${BOX_COST}`, cost: BOX_COST };
-      }
+    const M = this.map, key = this.keyName('use');
+    const zones = M.openZones(this.openDoors);   // the same rule as the server's
+    const B = M.BOX_SPOTS[this.level.box.spot] || M.BOX_SPOTS[0];
+    if (zones.has(B.zone) && near(B.pos[0], B.pos[1], B.pos[2], 2.1)) {
+      const bs = this.boxState;
+      if (bs.state === 'ready' && bs.owner === this.me) return { kind: 'boxTake', label: TEXT.boxTake(key, WEAPONS[bs.weapon].name), short: `Take ${WEAPONS[bs.weapon].name}` };
+      if (bs.state === 'idle') return { kind: 'box', label: TEXT.box(key, BOX_COST), short: `Mystery box · ${BOX_COST}`, cost: BOX_COST };
     }
-    for (const wb of WALL_BUYS) {
+    const machine = this.machineTarget(near, zones, key);
+    if (machine) return machine;
+    for (const wb of M.WALL_BUYS) {
       const fy = wb.pos[1] - 1.55;
       if (!near(wb.pos[0], fy, wb.pos[2], 1.7)) continue;
       const facing = -(_dir.x * wb.face[0] + _dir.z * wb.face[1]);
       if (facing < 0.2) continue;
       const W = WEAPONS[wb.weapon];
       const price = WALL_PRICES[wb.weapon];
+      const up = `${wb.weapon}_up`;
+      if (p.weapons.includes(up)) {
+        return { kind: 'wall', id: wb.id, label: TEXT.buyAmmo(this.keyName('use'), WEAPONS[up].name, UPGRADED_AMMO), short: `Ammo · ${UPGRADED_AMMO}`, cost: UPGRADED_AMMO };
+      }
       if (p.weapons.includes(wb.weapon)) {
         return { kind: 'wall', id: wb.id, label: TEXT.buyAmmo(this.keyName('use'), W.name, Math.round(price / 2)), short: `Ammo · ${Math.round(price / 2)}`, cost: Math.round(price / 2) };
       }
       return { kind: 'wall', id: wb.id, label: TEXT.buyGun(this.keyName('use'), W.name, price), short: `${W.name} · ${price}`, cost: price };
     }
-    for (const d of DOORS) {
-      if (this.openDoors.has(d.id)) continue;
+    for (const d of M.DOORS) {
+      if (this.openDoors.has(d.id) || d.hidden || !d.use.length) continue;
       if (d.use.some((u) => near(u[0], u[1], u[2], 2.3))) {
         const verb = d.kind === 'door' ? 'open the door' : 'clear the debris';
         return { kind: 'door', id: d.id, label: TEXT.openDoor(this.keyName('use'), verb, d.cost), short: `${d.kind === 'door' ? 'Open door' : 'Clear debris'} · ${d.cost}`, cost: d.cost };
       }
     }
-    for (const w of WINDOWS) {
-      if (this.boards[w.id] >= MAX_BOARDS) continue;
+    for (const w of M.WINDOWS) {
+      if (this.boards[w.id] >= M.MAX_BOARDS) continue;
       if (near(w.repair[0], w.repair[1], w.repair[2], 1.3)) return { kind: 'repair', hold: true, label: TEXT.rebuild(this.keyName('use')), short: 'Hold to rebuild' };
     }
-    if (near(RADIO.pos[0], 0, RADIO.pos[2], 1.6)) return { kind: 'radio', label: '', short: 'Radio' };
+    if (M.RADIO && near(M.RADIO.pos[0], 0, M.RADIO.pos[2], 1.6)) return { kind: 'radio', label: '', short: 'Radio' };
     // The figurine only answers once all three teacups are broken.
-    if (this.eggStage === 'ready') {
-      const f = EGG.figurine.pos;
+    if (M.EGG && this.eggStage === 'ready') {
+      const f = M.EGG.figurine.pos;
       if (near(f[0], 0, f[2], 2.0)) return { kind: 'egg', label: TEXT.figurine(this.keyName('use')), short: 'Touch the figurine' };
+    }
+    return null;
+  }
+
+  // The machines: perks, the breaker, the Forge, the teleporter and the Spark Gates.
+  machineTarget(near, zones, key) {
+    const M = this.map, p = this.p;
+    const off = { label: TEXT.needPower, short: 'No power' };
+    if (M.POWER && !this.power && zones.has(M.POWER.zone) && near(...M.POWER.use, 1.6)) {
+      return { kind: 'power', label: TEXT.power(key), short: 'Throw the breaker' };
+    }
+    for (const m of M.PERKS || []) {
+      if (!zones.has(m.zone) || !near(...m.use, 1.4)) continue;
+      const P = PERKS[m.perk];
+      if (!this.power) return { kind: 'none', ...off };
+      if (p.perks.includes(m.perk)) return null;
+      const solo = this.players.size <= 1;
+      if (solo && P.solo && (this.perkUses[m.perk] || 0) >= P.solo.uses) return null;
+      const cost = perkCost(m.perk, solo);
+      return { kind: 'perk', id: m.perk, label: TEXT.perk(key, P.name, cost), short: `${P.name} · ${cost}`, cost };
+    }
+    const F = M.FORGE;
+    if (F && zones.has(F.zone) && near(...F.use, 1.7)) {
+      if (!this.power) return { kind: 'none', ...off };
+      const fs = this.forge;
+      if (fs.state === 'ready' && fs.owner === this.me) return { kind: 'forgeTake', label: TEXT.boxTake(key, WEAPONS[fs.weapon].name), short: `Take ${WEAPONS[fs.weapon].name}` };
+      if (fs.state !== 'idle') return { kind: 'none', label: TEXT.forgeBusy, short: 'The Forge is working' };
+      const up = upgradedId(p.cur);
+      if (!up) return { kind: 'none', label: TEXT.forgeNo, short: 'Already forged' };
+      if (p.weapons.length < 2) return { kind: 'none', label: TEXT.forgeSpare, short: 'Carry a second gun' };
+      return { kind: 'forge', label: TEXT.forge(key, WEAPONS[p.cur].name, FORGE_COST), short: `Forge · ${FORGE_COST}`, cost: FORGE_COST };
+    }
+    const TP = M.TELEPORT;
+    if (TP) {
+      if (zones.has(TP.core.zone) && near(...TP.core.use, 1.6) && this.pads.some((s) => s === 'lever')) {
+        return { kind: 'link', id: 'core', label: TEXT.coreLink(key), short: 'Link the teleporter' };
+      }
+      for (let i = 0; i < TP.pads.length; i++) {
+        const pad = TP.pads[i], st = this.pads[i];
+        if (!zones.has(pad.zone)) continue;
+        if (near(...pad.pos, pad.radius + 0.1)) {
+          if (!this.power) return { kind: 'none', ...off };
+          if (st === 'linked') return { kind: 'tele', id: pad.id, label: TEXT.teleRide(key, TP.cost), short: `Teleport · ${TP.cost}`, cost: TP.cost };
+        }
+        if (near(...pad.use, 1.3)) {
+          if (!this.power) return { kind: 'none', ...off };
+          if (st === 'ready') return { kind: 'link', id: pad.id, label: TEXT.padLever(key), short: 'Pull the lever' };
+          if (st === 'lever') return { kind: 'none', label: TEXT.padWaiting, short: 'Link it at the lantern' };
+          if (st === 'cooldown') return { kind: 'none', label: TEXT.padCooling, short: 'Cooling down' };
+        }
+      }
+    }
+    for (let i = 0; i < (M.TRAPS || []).length; i++) {
+      const T = M.TRAPS[i];
+      if (!zones.has(T.zone) || !near(...T.switch.use, 1.4)) continue;
+      if (!this.power) return { kind: 'none', ...off };
+      if (this.traps[i] === 'ready') return { kind: 'trap', id: T.id, label: TEXT.trap(key, T.cost), short: `Spark Gate · ${T.cost}`, cost: T.cost };
+      return { kind: 'none', label: this.traps[i] === 'active' ? '' : TEXT.trapCooling, short: 'Spark Gate' };
     }
     return null;
   }
@@ -880,7 +1059,8 @@ export class Game {
     this.hud.prompt(this.input.touchMode ? '' : label);
     this.touch?.setUse(this.canAct() ? t : null);
     if (t && this.canAct() && this.input.hit('KeyF') && !t.hold) {
-      if (t.kind === 'radio') this.conn.send({ t: 'radio' });
+      if (t.kind === 'none') { /* a label only */ }
+      else if (t.kind === 'radio') this.conn.send({ t: 'radio' });
       else if (t.kind === 'egg') this.conn.send({ t: 'egg' });
       else if (t.kind === 'box') this.conn.send({ t: 'buy', k: 'box' });
       else if (t.kind === 'boxTake') this.conn.send({ t: 'buy', k: 'boxTake' });
@@ -888,7 +1068,7 @@ export class Game {
     }
     // Revive progress bar.
     if (t?.kind === 'revive' && this.input.down('KeyF')) this.hud.revive(`Reviving ${t.pl.name}…`, (t.pl.revive || 0) / 100);
-    else if (this.p.state === PS.DOWN && this.myRevive > 0) this.hud.revive('Being revived…', this.myRevive / 100);
+    else if (this.p.state === PS.DOWN && this.myRevive > 0) this.hud.revive(this.players.size <= 1 ? 'Getting back up…' : 'Being revived…', this.myRevive / 100);
     else this.hud.revive(null);
   }
 
@@ -901,9 +1081,9 @@ export class Game {
     const o = cam.position;
     const CONE = 0.13;
     let best = null, bestAng = CONE;
-    this.zombies.forEachTarget((id, zx, zy, zz, st, cls) => {
+    this.zombies.forEachTarget((id, zx, zy, zz, st, cls, yaw, fl) => {
       if (st === ZS.RISE) return;
-      const aimY = enemy(cls).aimY;
+      const aimY = enemyFor(cls, fl).aimY;
       const vx = zx - o.x, vy = zy + aimY - o.y, vz = zz - o.z;
       const d = Math.hypot(vx, vy, vz);
       if (d > 28 || d < 0.5) return;
@@ -933,9 +1113,9 @@ export class Game {
     const range = Math.min(W.range, 35);
     const wall = this.world.raycast(o.x, o.y, o.z, _dir.x, _dir.y, _dir.z, range);
     let hit = false;
-    this.zombies.forEachTarget((id, zx, zy, zz, st, cls, yaw) => {
+    this.zombies.forEachTarget((id, zx, zy, zz, st, cls, yaw, fl) => {
       if (hit || st === ZS.RISE) return;
-      if (enemyHitTest(cls, o.x, o.y, o.z, _dir.x, _dir.y, _dir.z, zx, zy, zz, yaw, wall)) hit = true;
+      if (enemyHitTest(cls, o.x, o.y, o.z, _dir.x, _dir.y, _dir.z, zx, zy, zz, yaw, wall, fl)) hit = true;
     });
     return hit;
   }
@@ -1071,8 +1251,8 @@ export class Game {
     else this.attract(dt);
     this.rig.update(dt, this.time);
     this.level.update(dt);
-    this.egg.update(dt);
-    this.exterior.update(dt);
+    this.egg?.update(dt);
+    this.machines.update(dt, this.time);
     this.zombies.update(dt, now, this.rig.camera.position);
     this.avatars.update(dt, now, this.zombies.interpDelay);
     this.fx.update(dt, this.mode === 'play' ? this.rig.camera.position : null);
@@ -1118,6 +1298,9 @@ export class Game {
       this.hud.netinfo('');
     }
     if (this.flashWhite > 0) this.flashWhite = Math.max(0, this.flashWhite - dt * 1.5);
+    this.perkJingles(dt);
+    const EGG = this.map.EGG;
+    if (!EGG) return;
     // Unbroken teacups catch the light now and then: a faint gold glint to find them by.
     if (this.eggStage === 'cups' && Math.random() < dt * 0.9) {
       const i = Math.floor(Math.random() * EGG.cups.length);
@@ -1138,12 +1321,26 @@ export class Game {
     }
   }
 
+  // Powered perk machines play their tune now and then to whoever is close.
+  perkJingles(dt) {
+    if (!this.power || !this.map.PERKS) return;
+    this.jingleT -= dt;
+    if (this.jingleT > 0) return;
+    this.jingleT = 30 + Math.random() * 40;
+    const p = this.p;
+    const m = this.map.PERKS.find((q) => Math.hypot(q.pos[0] - p.x, q.pos[2] - p.z) < 10 && Math.abs(q.pos[1] - p.y) < 2);
+    if (!m) return;
+    this.audio.perkJingle(m.perk, { x: m.pos[0], y: m.pos[1] + 1.6, z: m.pos[2] });
+    this.caption('jingle', SOUND_CAPTIONS.jingle, m.pos[0], m.pos[2]);
+  }
+
   attract(dt) {
     const cam = this.rig.camera;
     const t = this.time * 0.05;
-    const r = 24;
-    cam.position.set(-4 + Math.cos(t) * r, 6.5 + Math.sin(t * 0.7) * 1.5, Math.sin(t) * r);
-    cam.lookAt(-4, 2.2, 0);
+    const A = this.map.attract || { center: [0, 2, 0], radius: 20, height: 6 };
+    const [cx, cy, cz] = A.center, r = A.radius;
+    cam.position.set(cx + Math.cos(t) * r, A.height + Math.sin(t * 0.7) * 1.5, cz + Math.sin(t) * r);
+    cam.lookAt(cx, cy, cz);
     if (cam.fov !== 60) { cam.fov = 60; cam.updateProjectionMatrix(); }
   }
 

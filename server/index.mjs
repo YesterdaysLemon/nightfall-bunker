@@ -14,7 +14,8 @@ import { MatchRoom, PartyRoom } from '../src/net/rooms.js';
 import { randomCode, chooseRegion } from '../src/shared/protocol.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const dist = path.join(root, 'dist');
+// NB_DIST serves another build (parallel smoke runs build into their own folders).
+const dist = path.resolve(root, process.env.NB_DIST || 'dist');
 const PORT = Number(process.env.PORT || 8080);
 const HOST = process.env.HOST || '0.0.0.0';
 const REGION = 'origin';
@@ -47,9 +48,9 @@ function newParty(isPublic) {
   do { code = randomCode(() => crypto.randomInt(1 << 30) / (1 << 30)); } while (parties.has(code));
   const party = new PartyRoom({
     code, isPublic, regions: [REGION],
-    createMatch: async (region) => {
+    createMatch: async (region, { map } = {}) => {
       const id = crypto.randomBytes(32).toString('hex');
-      const room = new MatchRoom({ id, region, onEnded: () => setTimeout(() => matches.delete(id), 30_000) });
+      const room = new MatchRoom({ id, region, map, onEnded: () => setTimeout(() => matches.delete(id), 30_000) });
       matches.set(id, room);
       return id;
     },

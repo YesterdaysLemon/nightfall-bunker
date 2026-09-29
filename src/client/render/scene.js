@@ -1,9 +1,12 @@
 // Renderer, scene, lighting and sky. Light count is fixed for the whole
-// session so shaders compile once.
+// session so shaders compile once: a map's lamps (map.LIGHTS, any number) share a
+// pool of POOL point lights, given each frame to the lamps that matter most where
+// the camera is, fading in and out so none pops.
 
 import * as THREE from 'three';
-import { LIGHTS } from '../../shared/map.js';
 import { makeTvPass } from './retro.js';
+
+const POOL = 8;
 
 // lines: internal vertical resolution of the retro (1997 TV) frame.
 const QUALITY = {
@@ -38,12 +41,14 @@ export class SceneRig {
     this.ambient = new THREE.AmbientLight(0x3a342c, 0.6);
     this.scene.add(this.ambient);
 
-    this.bulbs = LIGHTS.map((l, i) => {
-      const light = new THREE.PointLight(l.color, l.intensity, l.distance, 1.6);
-      light.position.set(...l.pos);
+    this.pool = Array.from({ length: POOL }, () => {
+      const light = new THREE.PointLight(0xffffff, 0, 10, 1.6);
       this.scene.add(light);
-      return { light, base: l.intensity, flicker: l.flicker, fire: !!l.fire, seed: i * 17.3, level: 1, bulb: null };
+      return { light, lamp: null, fade: 0 };
     });
+    this.bulbs = [];     // the map's lamps (setLights); level.js hangs bulb meshes on them
+    this.power = true;
+    this.fogDensity = 0.032;
     // Muzzle flash / explosion light (always present, intensity toggled).
     this.flash = new THREE.PointLight(0xffc27a, 0, 9, 1.8);
     this.scene.add(this.flash);
@@ -170,6 +175,27 @@ export class SceneRig {
 
   setDread(on) { this.dreadTarget = on ? 1 : 0; }
 
+  // A map's lamps. Lamps marked `power` wait for setPower(true), glowing at `dim` (0..1,
+  // default 0) until then: emergency power, enough to find your way.
+  setLights(list, power = true) {
+    this.power = power;
+    this.bulbs = list.map((l, i) => ({
+      pos: new THREE.Vector3(...l.pos), color: new THREE.Color(l.color), base: l.intensity, distance: l.distance,
+      flicker: l.flicker, fire: !!l.fire, seed: i * 17.3, level: 1, bulb: null,
+      needsPower: !!l.power, dim: l.dim ?? 0, on: !l.power || power ? 1 : l.dim ?? 0, delay: 0, intensity: 0,
+    }));
+    for (const s of this.pool) { s.lamp = null; s.fade = 0; s.light.intensity = 0; }
+  }
+
+  // The breaker: powered lamps come on one after another, nearest the breaker first.
+  setPower(on, from = null) {
+    if (this.power === on) return;
+    this.power = on;
+    for (const b of this.bulbs) if (b.needsPower) b.delay = on && from ? 0.25 + b.pos.distanceTo(from) * 0.04 : 0;
+  }
+
+  setFog(density) { this.fogDensity = density ?? 0.032; if (!this._dreadWas) this.scene.fog.density = this.fogDensity; }
+
   update(dt, time) {
     // Fog rolls in over ~3 s and lifts over ~5 s.
     const rate = this.dreadTarget > this.dread ? 0.35 : 0.2;
@@ -179,7 +205,7 @@ export class SceneRig {
       this.fogColor.copy(this.baseFog).lerp(this.dreadFog, dr);
       this.scene.fog.color.copy(this.fogColor);
       this.scene.background.copy(this.fogColor);
-      this.scene.fog.density = 0.032 + dr * 0.068;
+      this.scene.fog.density = this.fogDensity + dr * 0.068;
       this.hemi.intensity = 1.1 * (1 - dr * 0.45);
       this.moon.intensity = 1.3 * (1 - dr * 0.7);
       this._dreadWas = dr > 0;
@@ -196,10 +222,19 @@ export class SceneRig {
         const cut = !failing ? 1 : this.calm ? 0.6 : Math.sin(time * 60) > 0 ? 0.1 : 1;
         k = (0.92 + 0.08 * n * flick) * cut * (1 - dr * 0.42);
       }
+      // Powered lamps warm up after the breaker (a short stutter unless calm).
+      if (b.needsPower) {
+        const target = this.power ? 1 : b.dim;
+        if (b.delay > 0) b.delay -= dt;
+        else if (b.on !== target) b.on = Math.max(0, Math.min(1, b.on + Math.sign(target - b.on) * dt * 1.6));
+        const warming = this.power && b.on < 1 && b.on > Math.max(0.2, b.dim + 0.05);
+        k *= warming && !this.calm && Math.sin(time * 47 + b.seed) > 0.3 ? 0.35 * b.on : b.on;
+      }
       b.level = k;
-      b.light.intensity = b.base * k;
-      if (b.bulb) b.bulb.material.color.setScalar(0.5 + k * 0.9);
+      b.intensity = b.base * k;
+      if (b.bulb) b.bulb.material.color.setScalar(0.12 + k * 1.2);
     }
+    this.assignLights(dt);
     if (this.boltT > 0) {
       this.boltT -= dt;
       const u = Math.max(0, this.boltT) / 0.42;
@@ -218,12 +253,37 @@ export class SceneRig {
     this.sky.position.copy(this.camera.position);
   }
 
+  // Give the pool's lights to the lamps that light the camera's surroundings most.
+  assignLights(dt) {
+    const cam = this.camera.position;
+    const score = (b) => (b.intensity <= 0.01 ? -1 : b.intensity / (1 + (b.pos.distanceTo(cam) / b.distance) ** 2));
+    const want = [...this.bulbs].filter((b) => score(b) > 0).sort((a, b) => score(b) - score(a)).slice(0, POOL);
+    const keep = new Set(want);
+    // Slots whose lamp dropped out fade away, then take a waiting lamp.
+    for (const s of this.pool) if (s.lamp && !keep.has(s.lamp)) s.fade = Math.max(0, s.fade - dt * 5);
+    const placed = new Set(this.pool.filter((s) => s.lamp && keep.has(s.lamp)).map((s) => s.lamp));
+    for (const b of want) {
+      if (placed.has(b)) continue;
+      const s = this.pool.find((q) => !q.lamp || (!keep.has(q.lamp) && q.fade <= 0));
+      if (!s) break;
+      s.lamp = b; s.fade = 0;
+      s.light.position.copy(b.pos); s.light.color.copy(b.color); s.light.distance = b.distance;
+      placed.add(b);
+    }
+    for (const s of this.pool) {
+      if (!s.lamp) { s.light.intensity = 0; continue; }
+      if (keep.has(s.lamp)) s.fade = Math.min(1, s.fade + dt * 5);
+      else if (s.fade <= 0) s.lamp = null;
+      s.light.intensity = s.lamp ? s.lamp.intensity * s.fade : 0;
+    }
+  }
+
   // Rough brightness at a point for lighting the viewmodel.
   lightAt(p) {
     let sum = 0.18;
     for (const b of this.bulbs) {
-      const d = b.light.position.distanceTo(p);
-      if (d < b.light.distance) sum += (b.light.intensity / 26) * Math.pow(1 - d / b.light.distance, 1.6);
+      const d = b.pos.distanceTo(p);
+      if (d < b.distance) sum += (b.intensity / 26) * Math.pow(1 - d / b.distance, 1.6);
     }
     return Math.min(1.6, sum);
   }

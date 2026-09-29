@@ -3,7 +3,7 @@
 // projectiles and enemy line-of-sight.
 
 import { BUNKER } from './map.js';
-import { enemy } from './enemies.js';
+import { enemyFor } from './enemies.js';
 import { ZC } from './protocol.js';
 
 const CELL = 2;   // spatial hash cell (m); the hash covers map.worldBounds
@@ -203,8 +203,9 @@ export function volumeHitTest(volumes, scale, ox, oy, oz, dx, dy, dz, x, y, z, y
   return part < 0 ? null : { t: best, part };
 }
 
-export function enemyHitTest(cls, ox, oy, oz, dx, dy, dz, x, y, z, yaw, maxDist) {
-  const e = enemy(cls);
+// flags: the enemy's condition (ZF bits); a crawler lies low.
+export function enemyHitTest(cls, ox, oy, oz, dx, dy, dz, x, y, z, yaw, maxDist, flags = 0) {
+  const e = enemyFor(cls, flags);
   return volumeHitTest(e.hit, e.scale, ox, oy, oz, dx, dy, dz, x, y, z, yaw, maxDist);
 }
 

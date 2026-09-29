@@ -1,28 +1,40 @@
-// Two-level navigation grid for the building interior with stair portals,
-// plus a multi-source Dijkstra flow field toward the nearest living player.
-// Built from a map (map.js; the bunker by default). Current limits a new map must
-// fit: two floors (the ground and one at map.LOFT_Y) and stairs that climb along x.
+// Navigation grid: one layer of 0.5 m cells per floor level of a map, plus a
+// multi-source Dijkstra flow field toward the nearest living player.
+//
+// Built from a map (mapkit.js defineMap): map.NAV_LEVELS are the floor heights,
+// lowest first; a cell on level k is walkable when map.walkable(x, z, k) says the
+// spot belongs to that level, a floor surface (the ground, a floor box's top or a
+// stair ramp) lies in the level's height band, and there is headroom above it.
+// Neighbouring cells connect when their floors differ by at most a step, on any
+// level, so stairs join floors by themselves (no hand-made portals).
 
 import { BUNKER } from './map.js';
+import { FLOOR_TAGS } from './mapkit.js';
 
 export const CELL = 0.5;
 const INFLATE = 0.3;
+const STEP = 0.5;          // the most a zombie climbs between neighbouring cells
+const BAND = 0.6;          // a level's floors start this far below its height
 const SQ2 = Math.SQRT2;
 
 export class NavGrid {
   constructor(map = BUNKER) {
     this.map = map;
-    this.x0 = map.BX0; this.z0 = map.BZ0;
-    this.nx = Math.round((map.BX1 - map.BX0) / CELL);
-    this.nz = Math.round((map.BZ1 - map.BZ0) / CELL);
+    const [x0, z0, x1, z1] = map.navBounds;
+    this.x0 = x0; this.z0 = z0;
+    this.nx = Math.round((x1 - x0) / CELL);
+    this.nz = Math.round((z1 - z0) / CELL);
     this.per = this.nx * this.nz;
-    const cells = this.per * 2;
+    this.levels = map.NAV_LEVELS;
+    this.L = this.levels.length;
+    const cells = this.per * this.L;
     this.walk = new Uint8Array(cells);
     this.height = new Float32Array(cells);
     this.dist = new Float32Array(cells).fill(Infinity);
-    this.portals = new Map();
     this.openDoors = new Set();
     this.static = map.buildStaticBoxes();
+    this.floors = this.static.filter((b) => FLOOR_TAGS.has(b.tag));
+    this.surf = null;      // per column: its floor surfaces (doors never change them)
     this.heap = new MinHeap(cells * 4);
     this.build();
   }
@@ -33,66 +45,83 @@ export class NavGrid {
   }
 
   index(level, ix, iz) { return level * this.per + iz * this.nx + ix; }
+  levelOf(i) { return Math.floor(i / this.per); }
   center(i) {
-    const level = i >= this.per ? 1 : 0;
-    const j = i - level * this.per;
+    const j = i % this.per;
     const ix = j % this.nx, iz = (j / this.nx) | 0;
     return [this.x0 + (ix + 0.5) * CELL, this.height[i], this.z0 + (iz + 0.5) * CELL];
   }
 
+  // The level a floor at height h belongs to.
+  bandOf(h) {
+    let k = 0;
+    while (k + 1 < this.L && h >= this.levels[k + 1] - BAND) k++;
+    return k;
+  }
+
+  // Every floor surface at (x, z): the ground, floor-box tops that aren't buried
+  // inside another floor, or the continuous ramp over a stair flight.
+  surfaces(x, z) {
+    const ramp = this.map.stairHeightAt(x, z);
+    if (ramp !== null) return [ramp];
+    const inside = (y) => this.floors.some(({ b }) => x > b[0] && x < b[3] && z > b[2] && z < b[5] && y > b[1] + 1e-3 && y < b[4] - 1e-3);
+    const out = [];
+    if (!inside(0.05)) out.push(0);
+    for (const { b, tag } of this.floors) {
+      if (tag === 'step' || !(x > b[0] && x < b[3] && z > b[2] && z < b[5])) continue;
+      if (!inside(b[4] + 0.05)) out.push(b[4]);
+    }
+    return out;
+  }
+
   build() {
-    const { IX0, IX1, IZ0, IZ1, LOFT_Y, STAIRS, DOORS, stairFootprint, stairHeightAt } = this.map;
-    const NX = this.nx, NZ = this.nz, BX0 = this.x0, BZ0 = this.z0;
+    const { DOORS } = this.map;
+    const NX = this.nx, NZ = this.nz, X0 = this.x0, Z0 = this.z0;
     const blockers = [
-      ...this.static.filter((b) => b.tag !== 'step' && b.tag !== 'floor0' && b.tag !== 'roof'),
+      ...this.static.filter((b) => !FLOOR_TAGS.has(b.tag) && b.tag !== 'roof'),
       ...DOORS.filter((d) => !this.openDoors.has(d.id)).map((d) => ({ b: d.box, tag: d.kind })),
     ];
-    const slabs = this.static.filter((b) => b.tag === 'slab');
-    for (let level = 0; level < 2; level++) {
+    if (!this.surf) {
+      // Floors (per column) and each level's floor height never change with doors.
+      this.surf = new Array(this.per);
+      this.floorAt = new Float32Array(this.per * this.L).fill(NaN);
       for (let iz = 0; iz < NZ; iz++) {
         for (let ix = 0; ix < NX; ix++) {
-          const i = this.index(level, ix, iz);
-          const x = BX0 + (ix + 0.5) * CELL, z = BZ0 + (iz + 0.5) * CELL;
-          let ok = x > IX0 && x < IX1 && z > IZ0 && z < IZ1;
-          let h = level ? LOFT_Y : 0;
-          if (ok && level === 0) {
-            const sh = stairHeightAt(x, z);
-            if (sh !== null) h = sh;
+          const x = X0 + (ix + 0.5) * CELL, z = Z0 + (iz + 0.5) * CELL;
+          const surf = (this.surf[iz * NX + ix] = this.surfaces(x, z));
+          for (let level = 0; level < this.L; level++) {
+            if (!this.map.walkable(x, z, level)) continue;
+            let h = -Infinity;
+            for (const s of surf) if (this.bandOf(s) === level && s > h) h = s;
+            if (h > -Infinity) this.floorAt[level * this.per + iz * NX + ix] = h;
           }
-          if (ok && level === 1) {
-            ok = slabs.some(({ b }) => x > b[0] && x < b[3] && z > b[2] && z < b[5]);
-          }
-          if (ok) {
-            const y0 = h + 0.3, y1 = h + 1.7;
-            for (const { b } of blockers) {
-              if (b[4] <= y0 || b[1] >= y1) continue;
-              if (x > b[0] - INFLATE && x < b[3] + INFLATE && z > b[2] - INFLATE && z < b[5] + INFLATE) { ok = false; break; }
-            }
-          }
-          this.walk[i] = ok ? 1 : 0;
-          this.height[i] = h;
         }
       }
     }
-    // Stair-top portals: top column of each flight <-> first loft cell beyond it.
-    this.portals.clear();
-    for (const s of STAIRS) {
-      const [x0, z0, x1, z1] = stairFootprint(s);
-      const topX = s.dir > 0 ? x1 - CELL / 2 : x0 + CELL / 2;
-      const loftX = topX + s.dir * CELL;
-      for (let z = z0 + CELL / 2; z < z1; z += CELL) {
-        const a = this.locateLevel(0, topX, z);
-        const b = this.locateLevel(1, loftX, z);
-        if (a < 0 || b < 0 || !this.walk[a] || !this.walk[b]) continue;
-        this.link(a, b); this.link(b, a);
+    // Every floor cell is walkable until an obstacle (inflated) sits in its headroom.
+    for (let i = 0; i < this.per * this.L; i++) {
+      const h = this.floorAt[i];
+      this.walk[i] = Number.isNaN(h) ? 0 : 1;
+      this.height[i] = Number.isNaN(h) ? this.levels[Math.floor(i / this.per)] : h;
+    }
+    for (const { b } of blockers) {
+      const ix0 = Math.max(0, Math.floor((b[0] - INFLATE - X0) / CELL)), ix1 = Math.min(NX - 1, Math.floor((b[3] + INFLATE - X0) / CELL));
+      const iz0 = Math.max(0, Math.floor((b[2] - INFLATE - Z0) / CELL)), iz1 = Math.min(NZ - 1, Math.floor((b[5] + INFLATE - Z0) / CELL));
+      for (let iz = iz0; iz <= iz1; iz++) {
+        const z = Z0 + (iz + 0.5) * CELL;
+        if (!(z > b[2] - INFLATE && z < b[5] + INFLATE)) continue;
+        for (let ix = ix0; ix <= ix1; ix++) {
+          const x = X0 + (ix + 0.5) * CELL;
+          if (!(x > b[0] - INFLATE && x < b[3] + INFLATE)) continue;
+          for (let level = 0; level < this.L; level++) {
+            const i = level * this.per + iz * NX + ix;
+            if (!this.walk[i]) continue;
+            const h = this.height[i];
+            if (b[4] > h + 0.3 && b[1] < h + 1.7) this.walk[i] = 0;
+          }
+        }
       }
     }
-  }
-
-  link(a, b) {
-    let l = this.portals.get(a);
-    if (!l) this.portals.set(a, l = []);
-    if (!l.includes(b)) l.push(b);
   }
 
   locateLevel(level, x, z) {
@@ -101,46 +130,52 @@ export class NavGrid {
     return this.index(level, ix, iz);
   }
 
-  // Exact cell under a position (no neighbour fallback), or -1.
-  locateStrict(x, y, z) {
-    const tryLevels = y > this.map.LOFT_Y - 0.6 ? [1, 0] : [0, 1];
-    for (const level of tryLevels) {
+  // The walkable cell under (x, z) whose floor is nearest y (within 1.2 m), or -1.
+  cellAt(x, z, y) {
+    let best = -1, bd = 1.2;
+    for (let level = 0; level < this.L; level++) {
       const i = this.locateLevel(level, x, z);
-      if (i >= 0 && this.walk[i] && Math.abs(this.height[i] - y) < 1.2) return i;
+      if (i < 0 || !this.walk[i]) continue;
+      const d = Math.abs(this.height[i] - y);
+      if (d < bd) { bd = d; best = i; }
     }
-    return -1;
+    return best;
   }
 
-  // Cell for a world position. Stairs belong to level 0. Falls back to the
-  // nearest walkable cell within one ring so wall-huggers still resolve.
+  // Exact cell under a position (no neighbour fallback), or -1.
+  locateStrict(x, y, z) { return this.cellAt(x, z, y); }
+
+  // Cell for a world position. Falls back to the nearest walkable cell within one
+  // ring so wall-huggers still resolve.
   locate(x, y, z) {
-    const upper = y > this.map.LOFT_Y - 0.6;
-    const tryLevels = upper ? [1, 0] : [0, 1];
-    for (const level of tryLevels) {
-      const i = this.locateLevel(level, x, z);
-      if (i >= 0 && this.walk[i] && Math.abs(this.height[i] - y) < 1.2) return i;
-    }
-    const level = upper ? 1 : 0;
+    const i = this.cellAt(x, z, y);
+    if (i >= 0) return i;
     let best = -1, bd = Infinity;
     for (let dz = -1; dz <= 1; dz++) {
       for (let dx = -1; dx <= 1; dx++) {
-        for (const lv of [level, 1 - level]) {
-          const i = this.locateLevel(lv, x + dx * CELL, z + dz * CELL);
-          if (i < 0 || !this.walk[i] || Math.abs(this.height[i] - y) > 1.2) continue;
-          const c = this.center(i);
-          const d = (c[0] - x) ** 2 + (c[2] - z) ** 2;
-          if (d < bd) { bd = d; best = i; }
-        }
+        const j = this.cellAt(x + dx * CELL, z + dz * CELL, y);
+        if (j < 0) continue;
+        const c = this.center(j);
+        const d = (c[0] - x) ** 2 + (c[2] - z) ** 2;
+        if (d < bd) { bd = d; best = j; }
       }
     }
     return best;
   }
 
+  // The walkable cell in column (x, z) within a step of height h, or -1.
+  stepTo(ix, iz, h) {
+    for (let level = 0; level < this.L; level++) {
+      const n = level * this.per + iz * this.nx + ix;
+      if (this.walk[n] && Math.abs(this.height[n] - h) <= STEP) return n;
+    }
+    return -1;
+  }
+
   // Calls fn(neighbour, cost) for every traversable edge out of i.
   neighbours(i, fn) {
-    const NX = this.nx, NZ = this.nz, PER = this.per;
-    const level = i >= PER ? 1 : 0;
-    const j = i - level * PER;
+    const NX = this.nx, NZ = this.nz;
+    const j = i % this.per;
     const ix = j % NX, iz = (j / NX) | 0;
     const h = this.height[i];
     for (let dz = -1; dz <= 1; dz++) {
@@ -148,17 +183,12 @@ export class NavGrid {
         if (!dx && !dz) continue;
         const x = ix + dx, z = iz + dz;
         if (x < 0 || z < 0 || x >= NX || z >= NZ) continue;
-        const n = level * PER + z * NX + x;
-        if (!this.walk[n] || Math.abs(this.height[n] - h) > 0.5) continue;
-        if (dx && dz) {
-          const a = level * PER + iz * NX + x, b = level * PER + z * NX + ix;
-          if (!this.walk[a] || !this.walk[b]) continue;
-        }
+        const n = this.stepTo(x, z, h);
+        if (n < 0) continue;
+        if (dx && dz && (this.stepTo(x, iz, h) < 0 || this.stepTo(ix, z, h) < 0)) continue;
         fn(n, dx && dz ? SQ2 : 1);
       }
     }
-    const p = this.portals.get(i);
-    if (p) for (const n of p) fn(n, 1);
   }
 
   // targets: array of world positions. Fills this.dist.
@@ -191,8 +221,6 @@ export class NavGrid {
     });
     return best;
   }
-
-  levelOf(i) { return i >= this.per ? 1 : 0; }
 }
 
 class MinHeap {

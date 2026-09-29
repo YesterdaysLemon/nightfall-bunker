@@ -25,6 +25,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { WEAPONS } from '../../shared/weapons.js';
 import { RANDOM_POWERUPS } from '../../shared/powerups.js';
 import { mulberry32 } from '../../shared/rng.js';
+import { COLD_WAR_BUILDERS } from './guns/coldwar.js';
 
 const PI = Math.PI;
 const HALF = PI / 2;
@@ -79,6 +80,10 @@ const RAMP = {
   wool: [[30, 32, 28], [40, 44, 34], [52, 56, 40], [64, 68, 48], [76, 80, 55], [90, 94, 64], [108, 112, 78], [134, 136, 96]],
   webbing: [[36, 40, 35], [50, 55, 43], [65, 71, 54], [82, 88, 66], [102, 107, 80], [126, 128, 98]],
   pgreen: [[64, 84, 16], [96, 124, 28], [132, 162, 46], [168, 196, 70], [200, 222, 104], [228, 240, 150]],
+  // Cold War furniture: black polymer, grey-green parkerizing, plum bakelite (AK magazines).
+  polymer: [[14, 14, 16], [20, 20, 23], [27, 27, 30], [35, 35, 38], [45, 45, 48], [58, 57, 58], [74, 72, 70]],
+  park: [[26, 29, 26], [36, 40, 36], [47, 51, 46], [59, 63, 57], [72, 76, 69], [88, 91, 83], [108, 110, 100]],
+  plum: [[30, 12, 10], [44, 18, 14], [60, 25, 19], [78, 34, 25], [98, 45, 33], [120, 60, 44], [142, 78, 58]],
   pgold: [[92, 60, 10], [134, 94, 22], [176, 132, 36], [210, 168, 62], [234, 202, 104], [250, 230, 156]],
 };
 
@@ -267,6 +272,45 @@ function paintGlow(ramp, seed) {
 
 let MATS = null;
 let TEX = null;
+let CAMO = null;
+
+// The Forge's camo for upgraded guns: blackened iron split by glowing ember veins.
+// One page for colour, one (the veins alone) for the glow.
+const EMBER = [[16, 12, 12], [26, 18, 16], [38, 25, 20], [52, 32, 24], [70, 40, 26], [150, 58, 20], [214, 104, 28], [250, 176, 70]];
+function paintCamo(seed, glowOnly) {
+  const W = 64, H = 64;
+  const r = mulberry32(seed);
+  const n16 = noise(W, H, 16, 16, r);
+  const n6 = noise(W, H, 6, 6, r);
+  const vein = noise(W, H, 12, 12, r);
+  const vein2 = noise(W, H, 5, 5, r);
+  return paintPage(W, H, (i) => {
+    const v1 = Math.abs(vein[i] - 0.5), v2 = Math.abs(vein2[i] - 0.5);
+    const crack = v1 < 0.035 || (v2 < 0.022 && n16[i] > 0.45);
+    if (glowOnly) return [EMBER, crack ? (v1 < 0.018 ? 1 : 0.86) : 0];
+    if (crack) return [EMBER, v1 < 0.018 ? 1 : 0.85];
+    return [EMBER, 0.28 + 0.14 * (n16[i] - 0.5) + 0.1 * (n6[i] - 0.5)];
+  });
+}
+
+// A camo version of a gun material (glass, glow and skin keep their own).
+function camoOf(m) {
+  if (!['metal', 'dark', 'wood'].includes(m.userData.chalk)) return m;
+  if (!CAMO) {
+    CAMO = { map: paintCamo(149, false), glow: paintCamo(149, true), mats: new Map() };
+  }
+  let c = CAMO.mats.get(m);
+  if (!c) {
+    c = new THREE.MeshPhongMaterial({
+      map: CAMO.map, emissive: 0xffffff, emissiveMap: CAMO.glow, emissiveIntensity: 0.85,
+      vertexColors: true, flatShading: true, specular: 0x4a3024, shininess: 20,
+    });
+    c.name = `${m.name}Forged`;
+    c.userData = { ...m.userData };
+    CAMO.mats.set(m, c);
+  }
+  return c;
+}
 
 // Per-material painted-light recipe: light = strength of the baked key/shadow
 // ramp, edge = brightening of bevelled chamfers (worn edges), ao = crease
@@ -289,6 +333,9 @@ function textures() {
     beech: paintWood(RAMP.beech, 41),
     birch: paintWood(RAMP.birch, 43),
     bakelite: paintBakelite(53),
+    polymer: paintSteel(RAMP.polymer, 131, 0.4, 0.06),
+    park: paintSteel(RAMP.park, 137, 0.44, 0.1),
+    plum: paintSteel(RAMP.plum, 139, 0.46, 0.08),
     olive: paintOlive(61),
     brass: paintBrass(RAMP.brass, 71),
     copper: paintBrass(RAMP.copper, 73),
@@ -328,6 +375,9 @@ function mats() {
     woodRed: matte('birchStock', 'wood', T.birch, P_WOOD),
     bakelite: metal('bakelite', 'dark', T.bakelite, P_DARK, 0x201a16, 22),
     olive: matte('olivePaint', 'metal', T.olive, P_WORN),
+    polymer: matte('polymer', 'dark', T.polymer, P_DARK),
+    park: metal('parkerized', 'metal', T.park, P_WORN, 0x303430, 10),
+    plum: metal('plumBakelite', 'dark', T.plum, P_DARK, 0x2a1612, 20),
     oliveDS: matte('olivePaintDS', 'metal', T.olive, P_WORN, { side: THREE.DoubleSide }),
     brass: metal('brass', 'metal', T.brass, P_BRASS, 0x5a4420, 16),
     copper: metal('copper', 'metal', T.copper, P_BRASS, 0x4a2a1c, 14),
@@ -1543,10 +1593,16 @@ function leyden(B, M) {
   return 1.1;
 }
 
+// The builders' toolkit, for gun files outside this module (the guns folder: (B, M, K) builders).
+const KIT = { THREE, G, PI, HALF, TAU, shapeFrom, along, triggerGuard, perforate, frontPost, buttPlate };
+
 export const WEAPON_BUILDERS = {
   m1911, kar98k, m1carbine, thompson, mp40, doublebarrel: doubleBarrel, trenchgun: trenchGun,
   bar, stg44, ppsh, mg42, panzerschreck, arcpistol: arcPistol, leyden,
+  ...Object.fromEntries(Object.entries(COLD_WAR_BUILDERS).map(([id, fn]) => [id, (B, M) => fn(B, M, KIT)])),
 };
+// Upgraded guns (the Forge) are their base gun in the Forge's camo.
+for (const [id, W] of Object.entries(WEAPONS)) if (W.upgradeOf && WEAPON_BUILDERS[W.upgradeOf]) WEAPON_BUILDERS[id] = WEAPON_BUILDERS[W.upgradeOf];
 
 // ---------------------------------------------------------------------------
 // Knife, grenade, hands, power-ups
@@ -1720,11 +1776,17 @@ export function buildWeaponModel(id) {
     console.warn(`[weapons3d] unknown weapon id "${id}", using m1911`);
     key = 'm1911';
   }
-  const bp = blueprint(`w:${key}`, () => {
-    const B = new Builder();
-    const length = WEAPON_BUILDERS[key](B, mats());
-    return finalize(B, key, length);
-  });
+  const base = WEAPONS[key]?.upgradeOf;
+  const bp = base
+    ? blueprint(`w:${key}`, () => {
+      const src = blueprint(`w:${base}`, () => { const B = new Builder(); return finalize(B, base, WEAPON_BUILDERS[base](B, mats())); });
+      return { ...src, id: key, parts: src.parts.map((p) => ({ ...p, meshes: p.meshes.map((m) => ({ geometry: m.geometry, material: camoOf(m.material) })) })) };
+    })
+    : blueprint(`w:${key}`, () => {
+      const B = new Builder();
+      const length = WEAPON_BUILDERS[key](B, mats());
+      return finalize(B, key, length);
+    });
   const g = instantiate(bp);
   g.userData.name = WEAPONS[key]?.name ?? key;
   return g;
@@ -1770,6 +1832,8 @@ export function disposeShared() {
   GEO.clear();
   if (MATS) for (const m of Object.values(MATS)) m.dispose();
   MATS = null;
+  if (CAMO) { CAMO.map.dispose(); CAMO.glow.dispose(); for (const m of CAMO.mats.values()) m.dispose(); }
+  CAMO = null;
   if (TEX) for (const t of Object.values(TEX)) t.dispose();
   TEX = null;
 }

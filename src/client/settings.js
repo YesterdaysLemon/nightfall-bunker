@@ -26,6 +26,7 @@ export const ACTIONS = [
 
 export const DEFAULTS = {
   name: '',
+  map: 'bunker',
   // Video
   quality: 'medium', fov: 80, crt: 70, brightness: 1,
   // Audio

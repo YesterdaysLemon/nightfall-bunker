@@ -125,9 +125,9 @@ export class Party extends DurableObject {
       code: meta.code,
       isPublic: meta.isPublic,
       regions: REGION_KEYS,
-      createMatch: async (region) => {
+      createMatch: async (region, { map } = {}) => {
         const id = this.env.MATCH.newUniqueId();
-        await this.env.MATCH.get(id, { locationHint: region }).setup(region, meta.code);
+        await this.env.MATCH.get(id, { locationHint: region }).setup(region, meta.code, map);
         return id.toString();
       },
       onChange: (m) => {
@@ -154,8 +154,8 @@ export class Match extends DurableObject {
     this.room = null;
   }
 
-  async setup(region, code) {
-    await this.ctx.storage.put('info', { region, code, created: Date.now() });
+  async setup(region, code, map) {
+    await this.ctx.storage.put('info', { region, code, map, created: Date.now() });
     return true;
   }
 
@@ -166,6 +166,7 @@ export class Match extends DurableObject {
       this.room = new MatchRoom({
         id: this.ctx.id.toString(),
         region: info.region,
+        map: info.map,
         timers: { setInterval: (f, ms) => setInterval(f, ms), clearInterval: (h) => clearInterval(h) },
         onEnded: () => { this.ctx.waitUntil(this.ctx.storage.deleteAll()); },
         log: (...a) => console.log(JSON.stringify({ level: 'info', match: info.code, msg: a.join(' ') })),

@@ -4,12 +4,12 @@
 
 import * as THREE from 'three';
 import { rng } from './geo.js';
-import { ZS, ZC, KILL } from '../../shared/protocol.js';
+import { ZS, ZC, ZF, KILL } from '../../shared/protocol.js';
 import { Hounds } from './hounds.js';
 import { KintsugiBoss } from './kintsugi.js';
 import { buildJoints } from './models.js';
 import { ZOMBIE_MODELS, zombieModelId, zombiePartFlags } from './zombie-models.js';
-import { enemy, UNTOUCHABLE } from '../../shared/enemies.js';
+import { enemy, enemyFor, UNTOUCHABLE } from '../../shared/enemies.js';
 
 const CAP = 48;
 const CLOTH = 0, SKIN = 1;
@@ -92,6 +92,7 @@ export class Zombies {
     this.calm = false;        // reduce flashing (hound warp flicker)
     this.useModels(models);
     this.bossInfo = { stage: 0, hpFrac: 1 };
+    this.mapId = 'bunker';    // whose horde (zombie-models.js `maps`); Game.setMap sets it
     this.quiet = false;       // game over: no new voices
     this.batches = new Map();
     this.batches.set('ghoul', models.ghoul ? this.buildFromModel(models.ghoul, rig) : this.buildProcedural(tex, rig));
@@ -182,7 +183,7 @@ export class Zombies {
         im.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(CAP * 3).fill(1), 3);
       }
       rig.scene.add(im);
-      return { im, joint, name: geoName, hat: geoName === 'helmet' ? 2 : 0, head: geoName === 'head' || geoName === 'eyes' || geoName === 'helmet', skin: geoName === 'head' };
+      return { im, joint, name: geoName, hat: geoName === 'helmet' ? 2 : 0, head: geoName === 'head' || geoName === 'eyes' || geoName === 'helmet', skin: geoName === 'head', shin: geoName === 'lowerLeg' };
     });
     return { rigJ, parts, count: 0 };
   }
@@ -222,10 +223,15 @@ export class Zombies {
     return { rigJ, parts, count: 0 };
   }
 
-  // Build the self-drawing families whose models are here (hound, kintsugi).
+  // Build what the models that arrived make possible: the self-drawing families
+  // (hound, kintsugi) and horde looks loaded after the menu (a map's locals).
   useModels(models) {
     for (const look of Object.keys(this.factories)) {
       if (models[look] && !this.drawers[look]) this.drawers[look] = this.factories[look](models[look]);
+    }
+    if (!this.batches) return;   // the constructor builds the boot horde itself
+    for (const id of Object.keys(ZOMBIE_MODELS)) {
+      if (models[id] && !this.batches.has(id)) this.batches.set(id, this.buildFromModel(models[id], this.rig));
     }
   }
 
@@ -244,7 +250,8 @@ export class Zombies {
   }
 
   // --- Network sync -----------------------------------------------------------------
-  // rows: [id, x, y, z, yaw, state, cls] in cm / milliradians. t = sample time (ms, local clock).
+  // rows: [id, x, y, z, yaw, state, cls, flags?] in cm / milliradians; flags are ZF
+  // condition bits (crawling, stunned). t = sample time (ms, local clock).
   applySnapshot(rows, t) {
     const seen = this._seen || (this._seen = new Set());
     seen.clear();
@@ -262,6 +269,7 @@ export class Zombies {
       if (s.length > 5) s.shift();
       if (z.state !== r[5]) { z.state = r[5]; z.stateT = 0; }
       z.cls = r[6];
+      z.flags = (r[7] | 0) | (z.flags & ZF.CRAWL);   // a crawler never stands again
     }
     for (const [id, z] of this.list) {
       if (!seen.has(id) && !z.killed) this.list.delete(id); // vanished without a kill event (e.g. nuke timing)
@@ -273,7 +281,7 @@ export class Zombies {
     const tint = 0.8 + R() * 0.3;
     const hue = R();
     return {
-      id, model: zombieModelId(id, r[6]), seed: id, samples: [], state: r[5], cls: r[6], stateT: 0, phase: R() * 6, speed: 0,
+      id, model: zombieModelId(id, r[6], this.mapId), seed: id, samples: [], state: r[5], cls: r[6], flags: r[7] | 0, stateT: 0, phase: R() * 6, speed: 0,
       x: r[1] / 100, y: r[2] / 100, z: r[3] / 100, yaw: r[4] / 1000,
       cloth: [tint * (0.92 + hue * 0.12), tint * (0.95 + 0.05 * R()), tint * (0.9 + (1 - hue) * 0.12)],
       skin: [0.85 + R() * 0.15, 0.85 + R() * 0.12, 0.8 + R() * 0.15],
@@ -296,6 +304,12 @@ export class Zombies {
     z.fallSpeed = kind === KILL.BLAST ? 2.5 : 1;
     // Electrocuted: stands rigid and fries for a moment before it drops.
     z.fryT = kind === KILL.SHOCK ? 0.55 + Math.random() * 0.3 : 0;
+    // Flung by the Gale Cannon: thrown away from the shooter, tumbling.
+    if (kind === KILL.GUST) {
+      const s = 7 + Math.random() * 5;
+      z.fling = { vx: Math.sin(angle) * s, vy: 4 + Math.random() * 2.5, vz: Math.cos(angle) * s, x: 0, y: 0, z: 0 };
+      z.fallSpeed = 3;
+    }
     this.dying.push(z);
     return z;
   }
@@ -305,7 +319,7 @@ export class Zombies {
   forEachTarget(fn) {
     for (const z of this.list.values()) {
       if (UNTOUCHABLE.has(z.state)) continue;
-      fn(z.id, z.x, z.y, z.z, z.state, z.cls, z.yaw);
+      fn(z.id, z.x, z.y, z.z, z.state, z.cls, z.yaw, z.flags);
     }
   }
 
@@ -329,6 +343,7 @@ export class Zombies {
       this.interpolate(z, rt, dt);
       z.stateT += dt;
       if (enemy(z.cls).boss) { z.stage = this.bossInfo.stage; z.hpFrac = this.bossInfo.hpFrac; }
+      if (z.flags & ZF.STUN) this.stunned(z, dt);
       if (!drawSelf(z)) {
         this.drawZombie(z, dt);
       }
@@ -358,6 +373,7 @@ export class Zombies {
     const batch = this.batches.get(z.model) || this.batches.get('ghoul');
     if (batch.count >= CAP) return;
     if (z.killed) this.poseDead(z, dt, batch.rigJ);
+    else if (z.flags & ZF.CRAWL) this.poseCrawl(z, dt, batch.rigJ);
     else this.pose(z, dt, batch.rigJ);
     this.write(z, batch.count++, batch);
   }
@@ -461,8 +477,63 @@ export class Zombies {
     }
   }
 
+  // Legs gone below the knee: prone, hips at its position, head raised about 0.7 m
+  // ahead, clawing forward hand over hand (the crawler hit volumes in enemies.js
+  // follow this pose).
+  poseCrawl(z, dt, J) {
+    for (const k of ['hips', 'spine', 'neck', 'shL', 'shR', 'elL', 'elR', 'hipL', 'hipR', 'knL', 'knR']) J[k].rotation.set(0, 0, 0);
+    const t = this.time + z.seed;
+    const moving = z.speed > 0.08;
+    z.phase += dt * (moving ? 2.2 + z.speed * 4 : 0.6);
+    const ph = z.phase, s = Math.sin(ph), c = Math.cos(ph);
+    const lunge = z.state === ZS.ATTACK ? Math.min(1, z.stateT / 0.5) : 0;
+    J.body.rotation.set(1.42, 0, s * 0.05);
+    J.body.position.set(0, 0.13 + Math.max(0, c) * 0.03 + lunge * 0.08, -0.93);
+    J.spine.rotation.set(-0.08 - lunge * 0.3, s * 0.12, 0);
+    J.neck.rotation.set(-1.05 - lunge * 0.2, Math.sin(t * 0.9) * 0.25, z.headTilt * 0.5);
+    // Arms reach past the head in turn and drag the body.
+    J.shL.rotation.set(-2.75 + s * 0.55 - lunge * 0.3, 0, 0.35);
+    J.shR.rotation.set(-2.75 - s * 0.55 - lunge * 0.3, 0, -0.35);
+    J.elL.rotation.x = -0.25 - Math.max(0, -s) * 0.9;
+    J.elR.rotation.x = -0.25 - Math.max(0, s) * 0.9;
+    // What's left of the legs trails behind.
+    J.hipL.rotation.set(0.12 + c * 0.1, 0, 0.1);
+    J.hipR.rotation.set(0.12 - c * 0.1, 0, -0.1);
+  }
+
+  // An Arc Pistol blast has it: sparks crawl over the body while it staggers on.
+  stunned(z, dt) {
+    z.stunFx = (z.stunFx || 0) - dt;
+    if (z.stunFx > 0) return;
+    z.stunFx = 0.07 + Math.random() * 0.06;
+    const E = enemyFor(z.cls, z.flags);
+    this.fx.shockCrawl(z.x, z.y, z.z, E.mid * 1.8);
+  }
+
   poseDead(z, dt, J) {
     if (z.deadT < z.fryT) return this.poseFry(z, J);
+    const f = z.fling;
+    if (f && dt > 0) {
+      f.vy -= 15 * dt;
+      f.x += f.vx * dt; f.y += f.vy * dt; f.z += f.vz * dt;
+      if (f.y < 0) { f.y = 0; f.vy *= -0.25; f.vx *= 0.6; f.vz *= 0.6; }
+      // Stop at walls: a flung body doesn't fly through them.
+      const w = this.fx.world;
+      if (w && !w.lineOfSight(z.x + f.x - f.vx * dt, z.y + 0.9 + f.y, z.z + f.z - f.vz * dt, z.x + f.x, z.y + 0.9 + f.y, z.z + f.z)) {
+        f.x -= f.vx * dt; f.z -= f.vz * dt; f.vx *= -0.2; f.vz *= -0.2;
+      }
+    }
+    if (z.flags & ZF.CRAWL) {
+      // Already down: it slumps flat where it lay.
+      const u = Math.min(1, z.deadT * 3);
+      this.poseCrawl(z, 0, J);
+      J.body.position.y = 0.13 - u * 0.08;
+      J.neck.rotation.x = -1.05 + u * 1.0;
+      J.shL.rotation.x = -2.75 + u * 0.4; J.shR.rotation.x = -2.6 + u * 0.3;
+      z.fall = 0;
+      z.sink = Math.max(0, z.deadT - 3.2) * 0.2;
+      return;
+    }
     const u = Math.min(1, (z.deadT - z.fryT) * 2.2 * z.fallSpeed);
     const ease = u * u;
     J.body.rotation.set(0, 0, 0);
@@ -502,7 +573,8 @@ export class Zombies {
       const a = z.fallDir ?? z.yaw + Math.PI;
       this._axis.set(Math.cos(a), 0, -Math.sin(a));
       this._q.setFromAxisAngle(this._axis, z.fall || 0).multiply(this._qy);
-      J.root.position.set(z.x, z.y - (z.sink || 0), z.z);
+      const f = z.fling;
+      J.root.position.set(z.x + (f ? f.x : 0), z.y - (z.sink || 0) + (f ? f.y : 0), z.z + (f ? f.z : 0));
       J.root.quaternion.copy(this._q);
     } else {
       J.root.position.set(z.x, z.y, z.z);
@@ -510,8 +582,10 @@ export class Zombies {
     }
     J.root.updateMatrixWorld(true);
     const c = this._c;
+    const legless = z.flags & ZF.CRAWL;
+    const stun = z.flags & ZF.STUN && !z.killed ? (this.calm ? 1 : 0.75 + Math.random() * 0.5) : 0;
     for (const p of batch.parts) {
-      if ((p.head && z.headless) || (p.hat && p.hat !== z.hat)) {
+      if ((p.head && z.headless) || (p.hat && p.hat !== z.hat) || (p.shin && legless)) {
         p.im.setMatrixAt(i, this._m.makeScale(0, 0, 0));
       } else {
         p.im.setMatrixAt(i, p.joint.matrixWorld);
@@ -521,6 +595,7 @@ export class Zombies {
         c.setRGB(col[0], col[1], col[2]);
         if (z.killed && z.kind === KILL.BLAST) c.multiplyScalar(0.35);
         else if (z.killed && z.kind === KILL.SHOCK) c.multiplyScalar(Math.max(0.28, 1 - z.deadT * 1.4));
+        if (stun) c.setRGB(c.r * (0.7 + stun * 0.3), c.g * (0.8 + stun * 0.4), c.b * (1 + stun * 0.7));   // a cold electric flicker
         p.im.setColorAt(i, c);
       }
     }
@@ -532,12 +607,18 @@ export class Zombies {
     const look = enemy(z.cls).look;
     if (look === 'hound') return this.houndVoice(z, dt, listener);
     if (look === 'kintsugi') return this.bossVoice(z, dt, listener);
-    z.voice?.move(z.x, z.y + 1.6, z.z);
+    const mouth = z.flags & ZF.CRAWL ? 0.4 : 1.6;
+    z.voice?.move(z.x, z.y + mouth, z.z);
+    if (z.flags & ZF.CRAWL) {
+      // Hands slapping and a body dragging over the floor.
+      z.stepAcc += z.speed * dt;
+      if (z.stepAcc > 0.9) { z.stepAcc = 0; this.audio.crawl?.({ x: z.x, y: z.y + 0.2, z: z.z }); }
+    }
     z.nextGroan -= dt;
     if (z.nextGroan > 0) return;
     const d = listener ? Math.hypot(listener.x - z.x, listener.z - z.z) : 0;
     z.nextGroan = 2.5 + Math.random() * 6 + d * 0.08;
-    const pos = { x: z.x, y: z.y + 1.6, z: z.z };
+    const pos = { x: z.x, y: z.y + mouth, z: z.z };
     const scream = z.cls === ZC.RUNNER && z.state === ZS.CHASE && Math.random() < 0.5;
     z.voice = scream ? this.audio.zombieScream(pos, z.seed) : this.audio.zombieGroan(pos, z.seed);
     this.onSound?.(scream ? 'scream' : 'groan', z);
